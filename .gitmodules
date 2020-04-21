@@ -6,3 +6,6 @@
 	path = anet_toolkit
 	url = https://github.com/yjxiong/ActivityNet-Toolkit
         branch=master
+[submodule "code"]
+	path = code
+	url = https://github.com/coin-dataset/code/
