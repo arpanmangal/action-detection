@@ -16,9 +16,10 @@ def load_proposal_file(filename):
         vid = info[offset]
         offset += 1
 
-        n_frame = int(float(info[1]) * float(info[2]))
-        n_gt = int(info[3])
-        offset = 4
+        n_frame = int(float(info[1]) * float(info[3]))
+        task_id = int(info[2])
+        n_gt = int(info[4])
+        offset = 5
 
         gt_boxes = [x.split() for x in info[offset:offset+n_gt]]
         offset += n_gt
@@ -26,12 +27,13 @@ def load_proposal_file(filename):
         offset += 1
         pr_boxes = [x.split() for x in info[offset:offset+n_pr]]
 
-        return vid, n_frame, gt_boxes, pr_boxes
+        return vid, task_id, n_frame, gt_boxes, pr_boxes
 
     return [parse_group(l) for l in info_list]
 
 
 def process_proposal_list(norm_proposal_list, out_list_name, frame_dict):
+    raise ValueError("This function has ceased to be functional for now")
     norm_proposals = load_proposal_file(norm_proposal_list)
 
     processed_proposal_list = []

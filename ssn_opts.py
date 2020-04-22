@@ -1,6 +1,6 @@
 import argparse
 parser = argparse.ArgumentParser(description="PyTorch code to train Structured Segment Networks (SSN)")
-parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14'])
+parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14', 'coin'])
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 
 # ========================= Model Configs ==========================
@@ -10,6 +10,9 @@ parser.add_argument('--num_body_segments', type=int, default=5)
 
 parser.add_argument('--dropout', '--do', default=0.8, type=float,
                     metavar='DO', help='dropout ratio (default: 0.8)')
+
+parser.add_argument('--data_root', type=str, default='data/rawframes',
+                    metavar='PATH', help='path of the rawframes folder')
 
 # ========================= Learning Configs ==========================
 parser.add_argument('--epochs', default=7, type=int, metavar='N',
@@ -42,6 +45,8 @@ parser.add_argument('--print-freq', '-p', default=20, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--eval-freq', '-ef', default=1, type=int,
                     metavar='N', help='evaluation frequency (default: 5)')
+parser.add_argument('--model_dir', '-md', default='models', type=str,
+                    metavar='PATH', help='path of models directory')
 
 # ========================= Runtime Configs ==========================
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
@@ -54,7 +59,7 @@ parser.add_argument('--init_weights', default='', type=str, metavar='PATH',
                     help='path to pretrained weights')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
-parser.add_argument('--snapshot_pref', type=str, default="")
+# parser.add_argument('--snapshot_pref', type=str, default="")
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--gpus', nargs='+', type=int, default=None)

@@ -97,7 +97,7 @@ def main():
     train_prop_file = 'data/{}_proposal_list.txt'.format(dataset_configs['train_list'])
     val_prop_file = 'data/{}_proposal_list.txt'.format(dataset_configs['test_list'])
     train_loader = torch.utils.data.DataLoader(
-        SSNDataSet("", train_prop_file,
+        SSNDataSet(args.data_root, train_prop_file,
                    epoch_multiplier=args.training_epoch_multiplier,
                    new_length=data_length,
                    modality=args.modality, exclude_empty=True, **sampling_configs,
@@ -114,7 +114,7 @@ def main():
         drop_last=True)  # in training we drop the last incomplete minibatch
 
     val_loader = torch.utils.data.DataLoader(
-        SSNDataSet("", val_prop_file,
+        SSNDataSet(args.data_root, val_prop_file,
                    new_length=data_length,
                    modality=args.modality, exclude_empty=True, **sampling_configs,
                    aug_seg=args.num_aug_segments, body_seg=args.num_body_segments,
@@ -144,9 +144,11 @@ def main():
                                 weight_decay=args.weight_decay)
 
     if args.evaluate:
+        raise ValueError("Disabled Temporarily")
         validate(val_loader, model, activity_criterion, completeness_criterion, regression_criterion, 0)
         return
 
+    print ('Starting Training...')
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args.lr_steps)
 
@@ -164,9 +166,12 @@ def main():
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
+                'loss': loss,
                 'best_loss': best_loss,
                 'reg_stats': torch.from_numpy(train_loader.dataset.stats)
-            }, is_best)
+            }, 
+            epoch,
+            is_best)
 
 
 def train(train_loader, model, act_criterion, comp_criterion, regression_criterion, optimizer, epoch):
@@ -362,11 +367,13 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
     return losses.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    filename = 'ssn'+'_'.join((args.snapshot_pref, args.dataset, args.arch, args.modality.lower(), filename))
+def save_checkpoint(state, epoch, is_best):
+    filename = 'ssn'+'_'.join((args.dataset, args.arch, args.modality.lower(), 'epoch_%d.pth.tar' % epoch))
+    filename = os.path.join(args.model_dir, filename)
     torch.save(state, filename)
     if is_best:
-        best_name = '_'.join((args.snapshot_pref, args.modality.lower(), 'model_best.pth.tar'))
+        best_name = '_'.join((args.modality.lower(), 'model_best.pth.tar'))
+        best_name = os.path.join(args.model_dir, best_name)
         shutil.copyfile(filename, best_name)
 
 
@@ -376,9 +383,9 @@ class AverageMeter(object):
         self.reset()
 
     def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
+        self.val = 0.0
+        self.avg = 0.0
+        self.sum = 0.0
         self.count = 0
 
     def update(self, val, n=1):

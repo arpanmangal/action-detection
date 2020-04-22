@@ -72,33 +72,40 @@ class SSNInstance:
 
 
 class SSNVideoRecord:
-    def __init__(self, prop_record):
+    def __init__(self, prop_record, data_root):
         self._data = prop_record
+        self.data_root = data_root
 
-        frame_count = int(self._data[1])
+        frame_count = int(self._data[2])
 
         # build instance record
         self.gt = [
-            SSNInstance(int(x[1]), int(x[2]), frame_count, label=int(x[0]), best_iou=1.0) for x in self._data[2]
-            if int(x[2]) > int(x[1])
+            SSNInstance(int(x[1]), int(x[2]), frame_count, label=int(x[0]),
+                        best_iou=1.0)
+            for x in self._data[3] if int(x[2]) > int(x[1])
         ]
 
         self.gt = list(filter(lambda x: x.start_frame < frame_count, self.gt))
 
         self.proposals = [
             SSNInstance(int(x[3]), int(x[4]), frame_count, label=int(x[0]),
-                        best_iou=float(x[1]), overlap_self=float(x[2])) for x in self._data[3] if int(x[4]) > int(x[3])
+                        best_iou=float(x[1]), overlap_self=float(x[2]))
+            for x in self._data[4] if int(x[4]) > int(x[3])
         ]
 
         self.proposals = list(filter(lambda x: x.start_frame < frame_count, self.proposals))
 
     @property
     def id(self):
-        return self._data[0]
+        return os.path.join(self.data_root, self._data[0])
+
+    @property
+    def task_id(self):
+        return self._data[1]
 
     @property
     def num_frames(self):
-        return int(self._data[1])
+        return int(self._data[2])
 
     def get_fg(self, fg_thresh, with_gt=True):
         fg = [p for p in self.proposals if p.best_iou > fg_thresh]
@@ -133,7 +140,7 @@ class SSNVideoRecord:
 
 class SSNDataSet(data.Dataset):
 
-    def __init__(self, root_path,
+    def __init__(self, data_root_path,
                  prop_file=None,
                  body_seg=5, aug_seg=2, video_centric=True,
                  new_length=1, modality='RGB',
@@ -146,7 +153,7 @@ class SSNDataSet(data.Dataset):
                  gt_as_fg=True, reg_stats=None, test_interval=6, verbose=True,
                  exclude_empty=True, epoch_multiplier=1):
 
-        self.root_path = root_path
+        self.data_root_path = data_root_path
         self.prop_file = prop_file
         self.verbose = verbose
 
@@ -196,7 +203,7 @@ class SSNDataSet(data.Dataset):
     def _parse_prop_file(self, stats=None):
         prop_info = load_proposal_file(self.prop_file)
 
-        self.video_list = [SSNVideoRecord(p) for p in prop_info]
+        self.video_list = [SSNVideoRecord(p, self.data_root_path) for p in prop_info]
 
         if self.exclude_empty:
             self.video_list = list(filter(lambda x: len(x.gt) > 0, self.video_list))
