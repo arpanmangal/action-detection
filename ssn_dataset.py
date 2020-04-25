@@ -263,7 +263,9 @@ class SSNDataSet(data.Dataset):
 
 
     def _video_centric_sampling(self, video):
-
+        """
+        Sample FG,IN,BG proposals from the given video
+        """
         fg = video.get_fg(self.fg_iou_thresh, self.gt_as_fg)
         incomp, bg = video.get_negatives(self.incomplete_iou_thresh, self.bg_iou_thresh,
                                      self.bg_coverage_thresh, self.incomplete_overlap_thresh)
@@ -461,9 +463,10 @@ class SSNDataSet(data.Dataset):
 
     def get_training_data(self, index):
         if self.video_centric:
-            video = self.video_list[index]
-            props = self._video_centric_sampling(video)
+            video = self.video_list[index] # An instance of SSNVideoRecord
+            props = self._video_centric_sampling(video) # List of ((vid_id, SSNInstance), proposal_type) of size 8
         else:
+            raise ValueError ("Sorry this was not expected!")
             props = self._random_sampling()
 
         out_frames = []

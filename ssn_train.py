@@ -239,6 +239,7 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
 
         # compute gradient and do SGD step
         loss.backward()
+        torch.cuda.empty_cache()
 
         if i % args.iter_size == 0:
             # scale down gradients when iter size is functioning
@@ -256,6 +257,7 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
 
             optimizer.step()
             optimizer.zero_grad()
+            torch.cuda.empty_cache()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -368,7 +370,7 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
 
 
 def save_checkpoint(state, epoch, is_best):
-    filename = 'ssn'+'_'.join((args.dataset, args.arch, args.modality.lower(), 'epoch_%d.pth.tar' % epoch))
+    filename = 'ssn_'+'_'.join((args.dataset, args.arch, args.modality.lower(), 'epoch_%d.pth.tar' % epoch))
     filename = os.path.join(args.model_dir, filename)
     torch.save(state, filename)
     if is_best:

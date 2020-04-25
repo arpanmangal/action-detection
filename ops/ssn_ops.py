@@ -249,6 +249,11 @@ class ClassWiseRegressionLoss(torch.nn.Module):
         self.smooth_l1_loss = nn.SmoothL1Loss()
 
     def forward(self, pred, labels, targets):
+        """
+        pred: size [n, NUM_CLASSES, 2] tensor
+        labels: size [1] tensor, denoting which regressor (class_ID)
+        targets: size [n, 2] tensor
+        """ 
         indexer = labels.data - 1
         prep = pred[:, indexer, :]
         class_pred = torch.cat((torch.diag(prep[:, :,  0]).view(-1, 1),

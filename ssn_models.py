@@ -172,7 +172,7 @@ class SSN(torch.nn.Module):
                     # shutdown update in frozen mode
                     m.weight.requires_grad = False
                     m.bias.requires_grad = False
-
+        
     def prepare_test_fc(self):
 
         self.test_fc = nn.Linear(self.activity_fc.in_features,
@@ -213,6 +213,7 @@ class SSN(torch.nn.Module):
         for m in self.modules():
             if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
                 ps = list(m.parameters())
+                assert len(ps) <= 2
                 conv_cnt += 1
                 if conv_cnt == 1:
                     first_conv_weight.append(ps[0])
@@ -224,6 +225,7 @@ class SSN(torch.nn.Module):
                         normal_bias.append(ps[1])
             elif isinstance(m, torch.nn.Linear):
                 ps = list(m.parameters())
+                assert len(ps) <= 2
                 linear_cnt += 1
                 normal_weight.append(ps[0])
                 if len(ps) == 2:
@@ -257,6 +259,17 @@ class SSN(torch.nn.Module):
             return self.test_forward(input)
 
     def train_forward(self, input, aug_scaling, target, reg_target, prop_type):
+        """
+        For InceptionV3
+        input.shape: [num_videos, 216, 299, 299]
+        aug_scaling.shape: [num_videos, 8, 2]
+        target.shape: [num_videos, 8]
+        reg_target.shape: [num_videos, 8, 2]
+        prop_type.shape: [num_videos, 8]
+        prop_type[i, :] = [0, 1, 1, 1, 1, 1, 1, 2] == [FG, IN, BG]
+        8 is the num_proposals
+        216 = 8 * 9 * 3
+        """
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
 
         if self.modality == 'RGBDiff':
