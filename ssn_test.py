@@ -14,11 +14,13 @@ from ops.utils import get_configs, get_reference_model_url
 
 parser = argparse.ArgumentParser(
     description="SSN Testing Tool")
-parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14'])
+parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14', 'coin'])
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('weights', type=str)
 parser.add_argument('save_scores', type=str)
 parser.add_argument('--arch', type=str, default="BNInception")
+parser.add_argument('--data_root', type=str, default='data/rawframes',
+                    metavar='PATH', help='path of the rawframes folder')
 parser.add_argument('--save_raw_scores', type=str, default=None)
 parser.add_argument('--aug_ratio', type=float, default=0.5)
 parser.add_argument('--frame_interval', type=int, default=6)
@@ -119,6 +121,7 @@ if __name__ == '__main__':
     if not args.use_reference and not args.use_kinetics_reference:
         checkpoint = torch.load(args.weights)
     else:
+        raise ValueError("Sorry, please use only the trained models!")
         model_url = get_reference_model_url(args.dataset, args.modality,
                                             'ImageNet' if args.use_reference else 'Kinetics', args.arch)
         checkpoint = model_zoo.load_url(model_url)
@@ -128,7 +131,7 @@ if __name__ == '__main__':
     base_dict = {'.'.join(k.split('.')[1:]): v for k, v in list(checkpoint['state_dict'].items())}
     stats = checkpoint['reg_stats'].numpy()
 
-    dataset = SSNDataSet("", test_prop_file,
+    dataset = SSNDataSet(args.data_root, test_prop_file,
                          new_length=data_length,
                          modality=args.modality,
                          aug_seg=2, body_seg=5,
