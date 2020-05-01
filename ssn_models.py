@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from transforms import *
 import torchvision.models
@@ -8,14 +9,16 @@ from ops.ssn_ops import Identity, StructuredTemporalPyramidPooling
 
 
 class SSN(torch.nn.Module):
-    def __init__(self, num_class,
+    def __init__(self, num_class, num_tasks,
                  starting_segment, course_segment, ending_segment, modality,
                  base_model='resnet101', new_length=None,
                  dropout=0.8,
                  crop_num=1, no_regression=False, test_mode=False,
-                 stpp_cfg=(1, (1, 2), 1), bn_mode='frozen'):
+                 stpp_cfg=(1, (1, 2), 1), bn_mode='frozen',
+                 task_head=False, glcu=False):
         super(SSN, self).__init__()
         self.modality = modality
+        self.num_tasks = num_tasks
         self.num_segments = starting_segment + course_segment + ending_segment
         self.starting_segment = starting_segment
         self.course_segment = course_segment
@@ -26,6 +29,13 @@ class SSN(torch.nn.Module):
         self.with_regression = not no_regression
         self.test_mode = test_mode
         self.bn_mode=bn_mode
+        self.task_head = task_head
+        self.glcu = glcu
+
+        if self.task_head:
+            assert num_tasks > 0
+        if self.glcu:
+            assert self.task_head # Task head is necessary for having glcu
 
         if new_length is None:
             self.new_length = 1 if modality == "RGB" else 5
@@ -44,16 +54,19 @@ class SSN(torch.nn.Module):
         dropout_ratio:      {}
         loc. regression:    {}
         bn_mode:            {}
+        task_head:          {}
+        glcu:               {}
         
         stpp_configs:       {} 
             """.format(base_model, self.modality,
                        self.starting_segment, self.course_segment, self.ending_segment,
                        self.num_segments, self.new_length, self.dropout, 'ON' if self.with_regression else "OFF",
-                       self.bn_mode, stpp_cfg)))
+                       self.bn_mode, self.task_head, self.glcu,
+                       stpp_cfg)))
 
         self._prepare_base_model(base_model)
 
-        feature_dim = self._prepare_ssn(num_class, stpp_cfg)
+        feature_dim = self._prepare_ssn(num_class, num_tasks, stpp_cfg)
 
         if self.modality == 'Flow':
             print("Converting the ImageNet model to a flow init model")
@@ -66,7 +79,7 @@ class SSN(torch.nn.Module):
 
         self.prepare_bn()
 
-    def _prepare_ssn(self, num_class, stpp_cfg):
+    def _prepare_ssn(self, num_class, num_tasks, stpp_cfg):
         feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
         if self.dropout == 0:
             setattr(self.base_model, self.base_model.last_layer_name, Identity())
@@ -89,6 +102,16 @@ class SSN(torch.nn.Module):
             nn.init.constant(self.regressor_fc.bias.data, 0)
         else:
             self.regressor_fc = None
+
+        if self.task_head:
+            # Prepare task head
+            self.task_head = GLCU(num_class, num_tasks, half_unit=True)
+            self.task_head.init_weights()
+
+        if self.glcu:
+            # Prepare GLCU unit
+            self.glcu = GLCU(feature_dim, num_tasks)
+            self.glcu.init_weights()
 
         return feature_dim
 
@@ -269,21 +292,50 @@ class SSN(torch.nn.Module):
         prop_type[i, :] = [0, 1, 1, 1, 1, 1, 1, 2] == [FG, IN, BG]
         8 is the num_proposals
         216 = 8 * 9 * 3
+
+        For BNInception:
+        input.shape: [num_videos, 216, 224, 224]
         """
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
+        num_videos = input.size(0)
 
         if self.modality == 'RGBDiff':
             sample_len = 3 * self.new_length
             input = self._get_diff(input)
 
+        # Input to base model has shape [num_videos * 8 * 9, 3, 224, 224]
+        # Output shape == [num_videos * 8 * 9, 1024]
         base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
 
+        # Add GLCU unit
+        if self.glcu:
+            num_per_video = base_out.size(0) // num_videos
+            step_features = base_out.view(num_videos, num_per_video, -1).mean(dim=1)
+            gate, glcu_task_pred = self.glcu(step_features)
+            gate = gate.repeat(1, num_per_video).view(-1, base_out.size(1))
+            base_out = base_out * gate
+        else:
+            glcu_task_pred = None
+
+        # activity_ft.shape = [num_videos * 8, 1024]
+        # completeness_ft.shape = [num_videos * 8, 3072]
         activity_ft, completeness_ft = self.stpp(base_out, aug_scaling, [self.starting_segment,
                                                                          self.starting_segment + self.course_segment,
                                                                          self.num_segments])
 
+        # raw_act_fc.shape = [num_videos * 8, 780]. 780 == K+1 == Num Classes
+        # raw_comp_fc.shape = [num_videos * 8, 779]
         raw_act_fc = self.activity_fc(activity_ft)
         raw_comp_fc = self.completeness_fc(completeness_ft)
+
+        # Add Task Head
+        if self.task_head:
+            combined_scores = F.softmax(raw_act_fc[:, 1:], dim=1) * torch.exp(raw_comp_fc)
+            combined_scores = combined_scores.view(num_videos, raw_act_fc.size(0) // num_videos, -1)
+            combined_scores = torch.mean(combined_scores, dim=1)
+            task_pred = self.task_head(combined_scores)
+        else:
+            task_pred = None
 
         type_data = prop_type.view(-1).data
         act_indexer = ((type_data == 0) + (type_data == 2)).nonzero().squeeze()
@@ -296,18 +348,25 @@ class SSN(torch.nn.Module):
             raw_regress_fc = self.regressor_fc(completeness_ft).view(-1, self.completeness_fc.out_features, 2)
             return raw_act_fc[act_indexer, :], target[act_indexer], \
                    raw_comp_fc[comp_indexer, :], target[comp_indexer], \
-                   raw_regress_fc[reg_indexer, :, :], target[reg_indexer], reg_target[reg_indexer, :]
+                   raw_regress_fc[reg_indexer, :, :], target[reg_indexer], reg_target[reg_indexer, :], \
+                   glcu_task_pred, task_pred
         else:
             return raw_act_fc[act_indexer, :], target[act_indexer], \
-                   raw_comp_fc[comp_indexer, :], target[comp_indexer]
+                   raw_comp_fc[comp_indexer, :], target[comp_indexer], \
+                   glcu_task_pred, task_pred
 
     def test_forward(self, input):
+        """
+        input is of shape [num_frames * num_crops, 3, 224, 224]
+        num_frames is by default 4 and num_crops is 10
+        """
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
 
         if self.modality == 'RGBDiff':
             sample_len = 3 * self.new_length
             input = self._get_diff(input)
 
+        # base_out.shape == [40, 1024]
         base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
 
         return self.test_fc(base_out), base_out
@@ -396,6 +455,14 @@ class SSN(torch.nn.Module):
     def scale_size(self):
         return self.input_size * 256 // 224
 
+    @property
+    def with_task_head(self):
+        return hasattr(self, 'task_head') and self.task_head
+
+    @property
+    def with_glcu(self):
+        return hasattr(self, 'glcu') and self.glcu 
+
     def get_augmentation(self):
         if self.modality == 'RGB':
             return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75, .66]),
@@ -406,3 +473,60 @@ class SSN(torch.nn.Module):
         elif self.modality == 'RGBDiff':
             return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75]),
                                                    GroupRandomHorizontalFlip(is_flow=False)])
+
+
+
+class GLCU(nn.Module):
+    """
+    Global Local Consistency Unit
+    """
+
+    def __init__ (self, in_feature_dim, num_tasks, middle_layers=[256], half_unit=False, init_std=0.001):
+        super (GLCU, self).__init__()
+
+        self.init_std = init_std
+        self.half_unit = half_unit
+
+        # Map input to task
+        self.ascending_layers = [in_feature_dim] + middle_layers + [num_tasks]
+        self.afc = nn.ModuleList([])
+        for in_size, out_size in zip(self.ascending_layers[:-1], self.ascending_layers[1:]):
+            self.afc.append(nn.Linear(in_size, out_size))
+
+        if not self.half_unit:
+            # Map task back to input
+            self.decending_layers = [num_tasks] + middle_layers[::-1] + [in_feature_dim]
+            self.dfc = nn.ModuleList([])
+            for in_size, out_size in zip(self.decending_layers[:-1], self.decending_layers[1:]):
+                self.dfc.append(nn.Linear(in_size, out_size))
+
+    def init_weights(self):
+        for fc in self.afc:
+            nn.init.normal(fc.weight.data, 0, self.init_std)
+            nn.init.constant(fc.bias.data, 0)
+        if not self.half_unit:
+            for fc in self.dfc:
+                nn.init.normal(fc.weight.data, 0, self.init_std)
+                nn.init.constant(fc.bias.data, 0)
+
+    def forward(self, feat):
+        len_afc = len(self.afc)
+        for i in range(len_afc - 1):
+            feat = F.relu(self.afc[i](feat))
+        task_feat = self.afc[-1](feat)
+
+        if self.half_unit:
+            return task_feat
+
+        feat = F.softmax(task_feat, dim=1)
+        len_dfc = len(self.dfc)
+        for i in range(len_dfc - 1):
+            feat = F.relu(self.dfc[i](feat))
+        feat = F.sigmoid(self.dfc[-1](feat))
+
+        return feat, task_feat
+
+    # def loss(self, task_score, task_labels, loss_weight):
+    #     losses = dict()
+    #     losses['loss_cons_unit1'] = F.cross_entropy(task_score, task_labels) * loss_weight
+    #     return losses

@@ -8,6 +8,11 @@ parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--num_aug_segments', type=int, default=2)
 parser.add_argument('--num_body_segments', type=int, default=5)
 
+parser.add_argument('--task_head', default=False, action='store_true',
+                    help='whether to use the MTL task head')
+parser.add_argument('--glcu', default=False, action='store_true',
+                    help='whether to use the GLCU unit after backbone')
+
 parser.add_argument('--dropout', '--do', default=0.8, type=float,
                     metavar='DO', help='dropout ratio (default: 0.8)')
 
@@ -35,10 +40,14 @@ parser.add_argument('--clip-gradient', '--gd', default=None, type=float,
                     metavar='W', help='gradient norm clipping (default: disabled)')
 parser.add_argument('--bn_mode', '--bn', default='frozen', type=str,
                     help="the mode of bn layers")
+parser.add_argument('--freeze_backbone', '--fb', default=False, action='store_true',
+                    help='Whether to freeze backbone and cls_head weights')
 parser.add_argument('--comp_loss_weight', '--lw', default=0.1, type=float,
                     metavar='LW', help='the weight for the completeness loss')
 parser.add_argument('--reg_loss_weight', '--rw', default=0.1, type=float,
                     metavar='LW', help='the weight for the location regression loss')
+parser.add_argument('--task_loss_weight', '--tw', default=0.2, type=float,
+                    metavar='LW', help='the weight for task prediction loss')
 
 # ========================= Monitor Configs ==========================
 parser.add_argument('--print-freq', '-p', default=20, type=int,

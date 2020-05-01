@@ -27,13 +27,15 @@ def main():
     dataset_configs = get_configs(args.dataset)
 
     num_class = dataset_configs['num_class']
+    num_tasks = dataset_configs['num_tasks'] if 'num_tasks' in dataset_configs else -1
     stpp_configs = tuple(dataset_configs['stpp'])
     sampling_configs = dataset_configs['sampling']
 
-    model = SSN(num_class, args.num_aug_segments, args.num_body_segments, args.num_aug_segments,
+    model = SSN(num_class, num_tasks, args.num_aug_segments, args.num_body_segments, args.num_aug_segments,
                 args.modality,
                 base_model=args.arch, dropout=args.dropout,
-                stpp_cfg=stpp_configs, bn_mode=args.bn_mode)
+                stpp_cfg=stpp_configs, bn_mode=args.bn_mode,
+                task_head=args.task_head, glcu=args.glcu)
 
     if args.init_weights:
         if os.path.isfile(args.init_weights):
@@ -131,6 +133,8 @@ def main():
         num_workers=args.workers, pin_memory=pin_memory)
 
     activity_criterion = torch.nn.CrossEntropyLoss().cuda()
+    task_criterion = torch.nn.CrossEntropyLoss().cuda()
+    glcu_task_criterion = torch.nn.CrossEntropyLoss().cuda()
     completeness_criterion = CompletenessLoss().cuda()
     regression_criterion = ClassWiseRegressionLoss().cuda()
 
@@ -153,11 +157,12 @@ def main():
         adjust_learning_rate(optimizer, epoch, args.lr_steps)
 
         # train for one epoch
-        train(train_loader, model, activity_criterion, completeness_criterion, regression_criterion, optimizer, epoch)
+        train(train_loader, model, activity_criterion, completeness_criterion, regression_criterion,
+              task_criterion, glcu_task_criterion, optimizer, epoch)
 
         # evaluate on validation set
         if (epoch + 1) % args.eval_freq == 0 or epoch == args.epochs - 1:
-            loss = validate(val_loader, model, activity_criterion, completeness_criterion, regression_criterion, (epoch + 1) * len(train_loader))
+            loss = validate(val_loader, model, activity_criterion, completeness_criterion, regression_criterion, task_criterion, glcu_task_criterion, (epoch + 1) * len(train_loader))
 
             # remember best prec@1 and save checkpoint
             is_best = loss < best_loss
@@ -174,13 +179,18 @@ def main():
             is_best)
 
 
-def train(train_loader, model, act_criterion, comp_criterion, regression_criterion, optimizer, epoch):
+def train(train_loader, model, act_criterion, comp_criterion, regression_criterion, task_criterion, glcu_task_criterion, optimizer, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
     act_losses = AverageMeter()
     comp_losses = AverageMeter()
     reg_losses = AverageMeter()
+    if model.module.with_task_head:
+        task_losses = AverageMeter()
+    if model.module.with_glcu:
+        glcu_losses = AverageMeter()
+    
     act_accuracies = AverageMeter()
     fg_accuracies = AverageMeter()
     bg_accuracies = AverageMeter()
@@ -194,7 +204,7 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
     ohem_num = train_loader.dataset.fg_per_video
     comp_group_size = train_loader.dataset.fg_per_video + train_loader.dataset.incomplete_per_video
     for i, (out_frames, out_prop_len, out_prop_scaling, out_prop_type, out_prop_labels,
-            out_prop_reg_targets, out_stage_split) \
+            out_prop_reg_targets, out_stage_split, out_task_labels) \
             in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -204,19 +214,26 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
         target_var = torch.autograd.Variable(out_prop_labels)
         reg_target_var = torch.autograd.Variable(out_prop_reg_targets)
         prop_type_var = torch.autograd.Variable(out_prop_type)
+        task_target_var = torch.autograd.Variable(out_task_labels.squeeze().cuda(async=True))
 
         # compute output
-
         activity_out, activity_target, \
         completeness_out, completeness_target, \
-        regression_out, regression_labels, regression_target = model(input_var, scaling_var, target_var,
-                                                                     reg_target_var, prop_type_var)
+        regression_out, regression_labels, regression_target, \
+        glcu_task_pred, task_pred = model(input_var, scaling_var, target_var,
+                                          reg_target_var, prop_type_var)
 
         act_loss = act_criterion(activity_out, activity_target)
         comp_loss = comp_criterion(completeness_out, completeness_target, ohem_num, comp_group_size)
         reg_loss = regression_criterion(regression_out, regression_labels, regression_target)
 
         loss = act_loss + comp_loss * args.comp_loss_weight + reg_loss * args.reg_loss_weight
+        if model.module.with_task_head:
+            task_loss = task_criterion(task_pred, task_target_var)
+            loss += task_loss * args.task_loss_weight
+        if model.module.with_glcu:
+            glcu_task_loss = glcu_task_criterion(glcu_task_pred, task_target_var)
+            loss += glcu_task_loss * args.task_loss_weight
 
         reg_losses.update(reg_loss.data[0], out_frames.size(0))
 
@@ -224,6 +241,8 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
         losses.update(loss.data[0], out_frames.size(0))
         act_losses.update(act_loss.data[0], out_frames.size(0))
         comp_losses.update(comp_loss.data[0], out_frames.size(0))
+        if model.module.with_task_head: task_losses.update(task_loss.data[0], out_frames.size(0))
+        if model.module.with_glcu: glcu_losses.update(glcu_task_loss.data[0], out_frames.size(0))
 
         act_acc = accuracy(activity_out, activity_target)
         act_accuracies.update(act_acc[0].data[0], activity_out.size(0))
@@ -264,25 +283,38 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}\t'
+            loss_str = ('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Act. Loss {act_losses.val:.3f} ({act_losses.avg: .3f}) \t'
-                  'Comp. Loss {comp_losses.val:.3f} ({comp_losses.avg: .3f}) '
+                  'Comp. Loss {comp_losses.val:.3f} ({comp_losses.avg: .3f}) \t'
+                  'Reg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'
                   .format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, act_losses=act_losses,
-                    comp_losses=comp_losses, lr=optimizer.param_groups[0]['lr'], ) +
-                  '\tReg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'.format(
-                      reg_loss=reg_losses)
-                  + '\n Act. FG {fg_acc.val:.02f} ({fg_acc.avg:.02f}) Act. BG {bg_acc.avg:.02f} ({bg_acc.avg:.02f})'
-                  .format(act_acc=act_accuracies,
-                    fg_acc=fg_accuracies, bg_acc=bg_accuracies)
-                  )
+                    comp_losses=comp_losses, reg_loss=reg_losses, 
+                    lr=optimizer.param_groups[0]['lr'], ))
+
+            
+            acc_str = ('\n Act. FG {fg_acc.val:.02f} ({fg_acc.avg:.02f}) Act. BG {bg_acc.avg:.02f} ({bg_acc.avg:.02f})'
+                        .format(act_acc=act_accuracies,
+                            fg_acc=fg_accuracies, bg_acc=bg_accuracies))
+
+            full_str = loss_str + acc_str
+            if model.module.with_task_head:
+                task_head_str = ('\nTask Loss {task_losses.val:.3f} ({task_losses.avg: .3f})'
+                                .format(task_losses=task_losses))
+                full_str += task_head_str
+            if model.module.with_glcu:
+                glcu_str = ('\nGLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
+                                .format(glcu_losses=glcu_losses))
+                full_str += glcu_str
+
+            print (full_str)
 
 
-def validate(val_loader, model, act_criterion, comp_criterion, regression_criterion, iter):
+def validate(val_loader, model, act_criterion, comp_criterion, regression_criterion, task_criterion, glcu_task_criterion, iter):
     batch_time = AverageMeter()
     losses = AverageMeter()
     act_losses = AverageMeter()
@@ -291,6 +323,10 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
     act_accuracies = AverageMeter()
     fg_accuracies = AverageMeter()
     bg_accuracies = AverageMeter()
+    if model.module.with_task_head:
+        task_losses = AverageMeter()
+    if model.module.with_glcu:
+        glcu_losses = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
@@ -299,7 +335,8 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
 
     ohem_num = val_loader.dataset.fg_per_video
     comp_group_size = val_loader.dataset.fg_per_video + val_loader.dataset.incomplete_per_video
-    for i, (out_frames, out_prop_len, out_prop_scaling, out_prop_type, out_prop_labels, out_prop_reg_targets, out_stage_split) \
+    for i, (out_frames, out_prop_len, out_prop_scaling, out_prop_type, out_prop_labels,
+            out_prop_reg_targets, out_stage_split, out_task_labels) \
             in enumerate(val_loader):
         target = out_prop_labels.cuda(async=True)
         input_var = torch.autograd.Variable(out_frames, volatile=True)
@@ -307,20 +344,26 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
         target_var = torch.autograd.Variable(target, volatile=True)
         reg_target_var = torch.autograd.Variable(out_prop_reg_targets)
         prop_type_var = torch.autograd.Variable(out_prop_type)
+        task_target_var = torch.autograd.Variable(out_task_labels.squeeze().cuda(async=True))
 
         # compute output
-
         activity_out, activity_target, \
         completeness_out, completeness_target, \
-        regression_out, regression_labels, regression_target = model(input_var, scaling_var, target_var,
-                                                                     reg_target_var, prop_type_var)
+        regression_out, regression_labels, regression_target, \
+        glcu_task_pred, task_pred = model(input_var, scaling_var, target_var,
+                                          reg_target_var, prop_type_var)
 
         act_loss = act_criterion(activity_out, activity_target)
-
         comp_loss = comp_criterion(completeness_out, completeness_target, ohem_num, comp_group_size)
         reg_loss = regression_criterion(regression_out, regression_labels, regression_target)
 
         loss = act_loss + comp_loss * args.comp_loss_weight + reg_loss * args.reg_loss_weight
+        if model.module.with_task_head:
+            task_loss = task_criterion(task_pred, task_target_var)
+            loss += task_loss * args.task_loss_weight
+        if model.module.with_glcu:
+            glcu_task_loss = glcu_task_criterion(glcu_task_pred, task_target_var)
+            loss += glcu_task_loss * args.task_loss_weight
 
         reg_losses.update(reg_loss.data[0], out_frames.size(0))
 
@@ -328,6 +371,8 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
         losses.update(loss.data[0], out_frames.size(0))
         act_losses.update(act_loss.data[0], out_frames.size(0))
         comp_losses.update(comp_loss.data[0], out_frames.size(0))
+        if model.module.with_task_head: task_losses.update(task_loss.data[0], out_frames.size(0))
+        if model.module.with_glcu: glcu_losses.update(glcu_task_loss.data[0], out_frames.size(0))
 
         act_acc = accuracy(activity_out, activity_target)
         act_accuracies.update(act_acc[0].data[0], activity_out.size(0))
@@ -357,6 +402,12 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
                     fg_acc=fg_accuracies, bg_acc=bg_accuracies) +
                   '\tReg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'.format(
                       reg_loss=reg_losses))
+            if model.module.with_task_head:
+                print(('Task Loss {task_losses.val:.3f} ({task_losses.avg: .3f})'
+                                .format(task_losses=task_losses)))
+            if model.module.with_glcu:
+                print(('GLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
+                                .format(glcu_losses=glcu_losses)))
 
     print('Testing Results: Loss {loss.avg:.5f} \t '
           'Activity Loss {act_loss.avg:.3f} \t '

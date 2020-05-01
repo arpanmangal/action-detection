@@ -70,6 +70,7 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
     while True:
         index = index_queue.get()
         frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = dataset[index]
+        
         num_crop = args.test_crops
         length = 3
         if args.modality == 'Flow':
@@ -77,15 +78,20 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
         elif args.modality == 'RGBDiff':
             length = 18
 
+        # output.shape == [num_frames, 7791]
         output = torch.zeros((frame_cnt, output_dim)).cuda()
         cnt = 0
         for frames in frames_gen:
+            # frames.shape == [frame_batch_size * num_crops * 3, 224, 224]
+            # frame_batch_size is 4 by default
             input_var = torch.autograd.Variable(frames.view(-1, length, frames.size(-2), frames.size(-1)).cuda(),
                                                 volatile=True)
             rst, _ = net(input_var, None, None, None, None)
             sc = rst.data.view(num_crop, -1, output_dim).mean(dim=0)
             output[cnt: cnt + sc.size(0), :] = sc
             cnt += sc.size(0)
+        # act_scores.shape == [num_proposals, K+1]
+        # comp_scores.shape == [num_proposals, K]
         act_scores, comp_scores, reg_scores = reorg_stpp.forward(output, prop_ticks, prop_scaling)
 
         if reg_scores is not None:

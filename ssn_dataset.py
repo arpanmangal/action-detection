@@ -476,6 +476,7 @@ class SSNDataSet(data.Dataset):
         out_prop_labels = []
         out_prop_reg_targets = []
         out_stage_split = []
+        out_task_label = [video.task_id]
         for idx, p in enumerate(props):
             prop_frames, prop_label, reg_targets, starting_scale, ending_scale, stage_split, prop_type = self._load_prop_data(
                 p)
@@ -495,9 +496,10 @@ class SSNDataSet(data.Dataset):
         out_prop_reg_targets = torch.from_numpy(np.array(out_prop_reg_targets, dtype=np.float32))
         out_prop_type = torch.from_numpy(np.array(out_prop_type))
         out_stage_split = torch.from_numpy(np.array(out_stage_split))
+        out_task_label = torch.from_numpy(np.array(out_task_label))
         out_frames = torch.cat(out_frames)
         return out_frames, out_prop_len, out_prop_scaling, out_prop_type, out_prop_labels, \
-               out_prop_reg_targets, out_stage_split
+               out_prop_reg_targets, out_stage_split, out_task_label
 
     def get_all_gt(self):
         gt_list = []
