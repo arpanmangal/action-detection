@@ -40,8 +40,10 @@ parser.add_argument('--clip-gradient', '--gd', default=None, type=float,
                     metavar='W', help='gradient norm clipping (default: disabled)')
 parser.add_argument('--bn_mode', '--bn', default='frozen', type=str,
                     help="the mode of bn layers")
-parser.add_argument('--freeze_backbone', '--fb', default=False, action='store_true',
-                    help='Whether to freeze backbone and cls_head weights')
+parser.add_argument('--tune_glcu', '--tg', default=False, action='store_true',
+                    help='Whether to freeze backbone and cls_head weights and only to tune GLCU\'s')
+parser.add_argument('--easy_load', '--el', default=False, action='store_true',
+                    help='Whether to just load the available parameter weights only')              
 parser.add_argument('--comp_loss_weight', '--lw', default=0.1, type=float,
                     metavar='LW', help='the weight for the completeness loss')
 parser.add_argument('--reg_loss_weight', '--rw', default=0.1, type=float,

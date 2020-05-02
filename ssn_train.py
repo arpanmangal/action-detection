@@ -63,7 +63,7 @@ def main():
     scale_size = model.scale_size
     input_mean = model.input_mean
     input_std = model.input_std
-    policies = model.get_optim_policies()
+    policies = model.get_optim_policies(args.tune_glcu)
     train_augmentation = model.get_augmentation()
 
     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
@@ -74,7 +74,7 @@ def main():
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             best_loss = checkpoint['best_loss']
-            model.load_state_dict(checkpoint['state_dict'])
+            model.load_state_dict(checkpoint['state_dict'], strict=(not args.easy_load))
             print(("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.evaluate, checkpoint['epoch'])))
         else:
@@ -307,7 +307,7 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
                                 .format(task_losses=task_losses))
                 full_str += task_head_str
             if model.module.with_glcu:
-                glcu_str = ('\nGLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
+                glcu_str = ('\tGLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
                                 .format(glcu_losses=glcu_losses))
                 full_str += glcu_str
 
@@ -404,10 +404,12 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
                       reg_loss=reg_losses))
             if model.module.with_task_head:
                 print(('Task Loss {task_losses.val:.3f} ({task_losses.avg: .3f})'
-                                .format(task_losses=task_losses)))
+                                .format(task_losses=task_losses)), end='\t')
             if model.module.with_glcu:
-                print(('GLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
+                print(('GLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})\n'
                                 .format(glcu_losses=glcu_losses)))
+            else:
+                print('\n-------------------------------------------')
 
     print('Testing Results: Loss {loss.avg:.5f} \t '
           'Activity Loss {act_loss.avg:.3f} \t '

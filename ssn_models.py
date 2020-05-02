@@ -223,7 +223,21 @@ class SSN(torch.nn.Module):
         self.test_fc.weight.data = weight
         self.test_fc.bias.data = bias
 
-    def get_optim_policies(self):
+    def get_optim_policies(self, tune_glcu):
+        """
+        Tune GLCU is true for fine-tuning only the GLCU weights
+        """
+        if tune_glcu:
+            parameters = []
+            for m in self.modules():
+                if isinstance(m, GLCU):
+                    ps = list(m.parameters())
+                    parameters.extend(ps)
+            return [
+                {'params': parameters, 'lr_mult': 1, 'decay_mult': 1,
+                'name': "glcu_parameters"}
+            ]
+
         first_conv_weight = []
         first_conv_bias = []
         normal_weight = []
