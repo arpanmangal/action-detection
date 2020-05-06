@@ -26,7 +26,9 @@ parser.add_argument('val_tag', type=str, help='Path to the val TAG file')
 parser.add_argument('W_pth', type=str, help='Path of the W matrix')
 parser.add_argument('--num_steps', type=int, default=779, help='Number of Steps')
 parser.add_argument('--num_tasks', type=int, default=180, help='Number of Tasks')
-parser.add_argument('--model_dir', '--md', type=str, help='Path where to save trained models', required=True)
+parser.add_argument('--model_dir', '--md', type=str, help='Path where to save trained models', default=None)
+parser.add_argument('--test', default=False, action='store_true', help='Test mode')
+parser.add_argument('--model_checkpoint', type=str, help='Path of model checkpoint (required for test mode)')
 parser.add_argument('--lr', type=float, default=0.01)
 parser.add_argument('--epochs', '--e', type=int, default=100)
 parser.add_argument('--eval-freq', '--ef', type=int, default=10)
@@ -200,6 +202,46 @@ class Trainer:
 
         print ('TC Accuracy: %.4f' % acc_meter.avg)
 
+    def inference(self, model_checkpoint):
+        self.load_model(model_checkpoint)
+        train_dataset = TaskDataSet(args.train_pkl, args.train_tag)
+        val_dataset = TaskDataSet(args.val_pkl, args.val_tag)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
+                                 shuffle=True, num_workers=4, pin_memory=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
+                                shuffle=True, num_workers=4, pin_memory=True)
+
+        train_acc = AverageMeter()
+        train_acc_tc = AverageMeter()
+        for inputs, target in train_loader:
+            inputs = torch.autograd.Variable(inputs.cuda(), volatile=True)
+            target = torch.autograd.Variable(target.squeeze().cuda(), volatile=True)
+            preds = self.net(inputs)
+            tc_preds = self.tc_net(inputs)
+            acc = self.compute_acc(preds.data.cpu().numpy(), target.data.cpu().numpy())
+            acc_tc = self.compute_acc(tc_preds.data.cpu().numpy(), target.data.cpu().numpy())
+            train_acc.update(acc, target.size(0))
+            train_acc_tc.update(acc_tc, target.size(0))
+
+        val_acc = AverageMeter()
+        val_acc_tc = AverageMeter()
+        for inputs, target in val_loader:
+            inputs = torch.autograd.Variable(inputs.cuda(), volatile=True)
+            target = torch.autograd.Variable(target.squeeze().cuda(), volatile=True)
+            preds = self.net(inputs)
+            tc_preds = self.tc_net(inputs)
+            acc = self.compute_acc(preds.data.cpu().numpy(), target.data.cpu().numpy())
+            acc_tc = self.compute_acc(tc_preds.data.cpu().numpy(), target.data.cpu().numpy())
+            val_acc.update(acc, target.size(0))
+            val_acc_tc.update(acc_tc, target.size(0))
+        
+        print (('Train Acc.: %.4f\n'
+                'Train Acc. (TC): %.4f\n'
+                'Val Acc.: %.4f\n'
+                'Val Acc. (TC): %.4f') % 
+                (train_acc.avg, train_acc_tc.avg, val_acc.avg, val_acc_tc.avg))
+        
+
     def save_model(self, checkpoint_path, model=None):
         if model is None: model = self.net
         torch.save(model.state_dict(), checkpoint_path)
@@ -230,6 +272,12 @@ class AverageMeter(object):
 
 if __name__ == '__main__':
     trainer = Trainer()
-    trainer.compute_tc_acc()
-    trainer.train()
+    if args.test:
+        # Run inference
+        trainer.inference(args.model_checkpoint)
+    else:
+        # Train model
+        assert args.model_dir is not None
+        trainer.compute_tc_acc()
+        trainer.train()
     
