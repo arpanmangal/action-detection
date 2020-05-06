@@ -16,13 +16,14 @@ from torch import optim
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 sys.path.append(os.getcwd())
-from ssn_models import GLCU
+from ssn_models import GLCU, TC
 
 parser = argparse.ArgumentParser(description="PyTorch code to train task head (GLCU)")
 parser.add_argument('train_pkl', type=str, help='Path to the training pickle file')
 parser.add_argument('val_pkl', type=str, help='Path to the val pickle file')
 parser.add_argument('train_tag', type=str, help='Path to the training TAG file')
 parser.add_argument('val_tag', type=str, help='Path to the val TAG file')
+parser.add_argument('W_pth', type=str, help='Path of the W matrix')
 parser.add_argument('--num_steps', type=int, default=779, help='Number of Steps')
 parser.add_argument('--num_tasks', type=int, default=180, help='Number of Tasks')
 parser.add_argument('--model_dir', '--md', type=str, help='Path where to save trained models', required=True)
@@ -100,6 +101,9 @@ class Trainer:
     """
     def __init__(self):
         self.net = GLCU(args.num_steps, args.num_tasks, half_unit=True).cuda()
+        W = np.load(args.W_pth)
+        assert W.shape == (args.num_steps, args.num_tasks)
+        self.tc_net = TC(W)
 
     def train(self):
         """
@@ -179,7 +183,22 @@ class Trainer:
         preds = np.argmax(preds, axis=1)
         assert preds.shape == target.shape
         acc = sum(preds == target) / len(target)
-        return acc
+        return acc * 100
+
+    def compute_tc_acc(self):
+        val_dataset = TaskDataSet(args.val_pkl, args.val_tag)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
+                                shuffle=True, num_workers=4, pin_memory=True)
+        acc_meter = AverageMeter()
+        for inputs, target in val_loader:
+            inputs = torch.autograd.Variable(inputs.cuda(), volatile=True)
+            target = torch.autograd.Variable(target.squeeze().cuda(), volatile=True)
+            tc_preds = self.tc_net(inputs)
+
+            acc = self.compute_acc(tc_preds.data.cpu().numpy(), target.data.cpu().numpy())
+            acc_meter.update(acc, target.size(0))
+
+        print ('TC Accuracy: %.4f' % acc_meter.avg)
 
     def save_model(self, checkpoint_path, model=None):
         if model is None: model = self.net
@@ -211,5 +230,6 @@ class AverageMeter(object):
 
 if __name__ == '__main__':
     trainer = Trainer()
+    trainer.compute_tc_acc()
     trainer.train()
     

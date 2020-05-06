@@ -228,11 +228,17 @@ class SSN(torch.nn.Module):
         Tune GLCU is true for fine-tuning only the GLCU weights
         """
         if tune_glcu:
+            for param in self.parameters():
+                # Disable gradient computation for all layers
+                param.requires_grad = False
+
             parameters = []
             for m in self.modules():
                 if isinstance(m, GLCU):
                     ps = list(m.parameters())
                     parameters.extend(ps)
+            for param in parameters:
+                param.requires_grad = True
             return [
                 {'params': parameters, 'lr_mult': 1, 'decay_mult': 1,
                 'name': "glcu_parameters"}
@@ -344,6 +350,7 @@ class SSN(torch.nn.Module):
 
         # Add Task Head
         if self.task_head:
+            # task_indexer = ((type_data == 0)).nonzero().squeeze()
             combined_scores = F.softmax(raw_act_fc[:, 1:], dim=1) * torch.exp(raw_comp_fc)
             combined_scores = combined_scores.view(num_videos, raw_act_fc.size(0) // num_videos, -1)
             combined_scores = torch.mean(combined_scores, dim=1)
@@ -500,6 +507,7 @@ class GLCU(nn.Module):
 
         self.init_std = init_std
         self.half_unit = half_unit
+        self.in_features = in_feature_dim
 
         # Map input to task
         self.ascending_layers = [in_feature_dim] + middle_layers + [num_tasks]
@@ -540,7 +548,17 @@ class GLCU(nn.Module):
 
         return feat, task_feat
 
-    # def loss(self, task_score, task_labels, loss_weight):
-    #     losses = dict()
-    #     losses['loss_cons_unit1'] = F.cross_entropy(task_score, task_labels) * loss_weight
-    #     return losses
+
+class TC(nn.Module):
+    """
+    COIN's TC head
+    """
+    def __init__(self, W):
+        super (TC, self).__init__()
+        self.W = W
+        self.in_features = W.shape[0]
+        self.out_features = W.shape[1]
+
+    def forward(self, step_scores):
+        W = torch.autograd.Variable(torch.FloatTensor(self.W).cuda())
+        return torch.mm(step_scores, W)
