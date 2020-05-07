@@ -223,10 +223,13 @@ class SSN(torch.nn.Module):
         self.test_fc.weight.data = weight
         self.test_fc.bias.data = bias
 
-    def get_optim_policies(self, tune_glcu):
+    def get_optim_policies(self, tune_glcu, tune_cls_head):
         """
         Tune GLCU is true for fine-tuning only the GLCU weights
+        Tune CLS_HEAD is true for fine-tuning only cls-head weights
         """
+        assert not (tune_glcu and tune_cls_head)
+
         if tune_glcu:
             for param in self.parameters():
                 # Disable gradient computation for all layers
@@ -242,6 +245,61 @@ class SSN(torch.nn.Module):
             return [
                 {'params': parameters, 'lr_mult': 1, 'decay_mult': 1,
                 'name': "glcu_parameters"}
+            ]
+
+        if tune_cls_head:
+            for param in self.parameters():
+                # Disable gradient computation for all layers
+                param.requires_grad = False
+
+            act_cnt = 0
+            comp_cnt = 0
+            reg_cnt = 0
+            glcu_cnt = 0
+            for param in self.activity_fc.parameters():
+                param.requires_grad = True
+                act_cnt += 1
+            for param in self.completeness_fc.parameters():
+                param.requires_grad = True
+                comp_cnt += 1
+            if self.with_regression:
+                for param in self.regressor_fc.parameters():
+                    param.requires_grad = True
+                    reg_cnt += 1
+            if self.with_glcu:
+                for fc in self.glcu.dfc:
+                    for param in fc.parameters():
+                        param.requires_grad = True
+                        glcu_cnt += 1
+            print ('#Act. parameters:', act_cnt)
+            print ('#Comp. parameters:', comp_cnt)
+            print ('#Reg. parameters:', reg_cnt)
+            print ('#GLCU. parameters:', glcu_cnt)
+
+            linear_weight = []
+            linear_bias = []
+            for m in self.modules():
+                if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
+                    continue
+                elif isinstance(m, torch.nn.Linear):
+                    ps = list(m.parameters())
+                    assert len(ps) <= 2
+                    if ps[0].requires_grad:
+                        linear_weight.append(ps[0])
+                    if len(ps) == 2 and ps[1].requires_grad:
+                        linear_bias.append(ps[1])
+                elif isinstance(m, torch.nn.BatchNorm1d):
+                    continue
+                elif isinstance(m, torch.nn.BatchNorm2d):
+                    continue
+                elif len(m._modules) == 0:
+                    if len(list(m.parameters())) > 0:
+                        raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
+            return [
+                {'params': linear_weight, 'lr_mult': 1, 'decay_mult': 1,
+                'name': "linear_weight"},
+                {'params': linear_bias, 'lr_mult': 2, 'decay_mult': 0,
+                'name': "linear_bias"}
             ]
 
         first_conv_weight = []

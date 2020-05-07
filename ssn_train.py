@@ -63,7 +63,7 @@ def main():
     scale_size = model.scale_size
     input_mean = model.input_mean
     input_std = model.input_std
-    policies = model.get_optim_policies(args.tune_glcu)
+    policies = model.get_optim_policies(args.tune_glcu, args.tune_cls_head)
     train_augmentation = model.get_augmentation()
 
     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
@@ -283,12 +283,12 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
         end = time.time()
 
         if i % args.print_freq == 0:
-            loss_str = ('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Act. Loss {act_losses.val:.3f} ({act_losses.avg: .3f}) \t'
-                  'Comp. Loss {comp_losses.val:.3f} ({comp_losses.avg: .3f}) \t'
+            loss_str = ('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}    '
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})    '
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})    '
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})    '
+                  'Act. Loss {act_losses.val:.3f} ({act_losses.avg: .3f})     '
+                  'Comp. Loss {comp_losses.val:.3f} ({comp_losses.avg: .3f})     '
                   'Reg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'
                   .format(
                    epoch, i, len(train_loader), batch_time=batch_time,
@@ -307,7 +307,7 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
                                 .format(task_losses=task_losses))
                 full_str += task_head_str
             if model.module.with_glcu:
-                glcu_str = ('\tGLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
+                glcu_str = ('    GLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})'
                                 .format(glcu_losses=glcu_losses))
                 full_str += glcu_str
 
@@ -391,33 +391,33 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Act. Loss {act_loss.val:.3f} ({act_loss.avg:.3f})\t'
-                  'Comp. Loss {comp_loss.val:.3f} ({comp_loss.avg:.3f})\t'
+            print('Test: [{0}/{1}]    '
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})    '
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})    '
+                  'Act. Loss {act_loss.val:.3f} ({act_loss.avg:.3f})    '
+                  'Comp. Loss {comp_loss.val:.3f} ({comp_loss.avg:.3f})    '
                   'Act. Accuracy {act_acc.val:.02f} ({act_acc.avg:.2f}) FG {fg_acc.val:.02f} BG {bg_acc.val:.02f}'.format(
                    i, len(val_loader), batch_time=batch_time, loss=losses,
                     act_loss=act_losses, comp_loss=comp_losses, act_acc=act_accuracies,
                     fg_acc=fg_accuracies, bg_acc=bg_accuracies) +
-                  '\tReg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'.format(
+                  '    Reg. Loss {reg_loss.val:.3f} ({reg_loss.avg:.3f})'.format(
                       reg_loss=reg_losses))
             if model.module.with_task_head:
                 print(('Task Loss {task_losses.val:.3f} ({task_losses.avg: .3f})'
-                                .format(task_losses=task_losses)), end='\t')
+                                .format(task_losses=task_losses)), end='    ')
             if model.module.with_glcu:
                 print(('GLCU Loss {glcu_losses.val:.3f} ({glcu_losses.avg: .3f})\n'
                                 .format(glcu_losses=glcu_losses)))
             else:
                 print('\n-------------------------------------------')
 
-    print('Testing Results: Loss {loss.avg:.5f} \t '
-          'Activity Loss {act_loss.avg:.3f} \t '
+    print('Testing Results: Loss {loss.avg:.5f}      '
+          'Activity Loss {act_loss.avg:.3f}      '
           'Completeness Loss {comp_loss.avg:.3f}\n'
           'Act Accuracy {act_acc.avg:.02f} FG Acc. {fg_acc.avg:.02f} BG Acc. {bg_acc.avg:.02f}'
           .format(act_loss=act_losses, comp_loss=comp_losses, loss=losses, act_acc=act_accuracies,
                   fg_acc=fg_accuracies, bg_acc=bg_accuracies)
-          + '\t Regression Loss {reg_loss.avg:.3f}'.format(reg_loss=reg_losses))
+          + '     Regression Loss {reg_loss.avg:.3f}'.format(reg_loss=reg_losses))
 
     return losses.avg
 
