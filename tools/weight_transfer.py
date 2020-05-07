@@ -55,14 +55,13 @@ def transfer_weights(base, submodel, save_checkpoint_pth, task_head=False, cls_h
     base_model = load_model(base)
     submodel_weights = load_model(submodel)
     
-    if task_head:
-        for key, weight in submodel_weights.items():
-            if task_head: base_key = 'module.task_head.' + key
-            if mid_glcu: base_key = 'module.glcu.' + key
-            if reverse:
-                submodel_weights[key] = base_model['state_dict'][base_key]
-            else:
-                base_model['state_dict'][base_key] = weight
+    for key, weight in submodel_weights.items():
+        if task_head: base_key = 'module.task_head.' + key
+        if mid_glcu: base_key = 'module.glcu.' + key
+        if reverse:
+            submodel_weights[key] = base_model['state_dict'][base_key]
+        else:
+            base_model['state_dict'][base_key] = weight
 
     if reverse:
         torch.save(submodel_weights, save_checkpoint_pth)
