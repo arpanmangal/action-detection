@@ -2,6 +2,7 @@ import argparse
 import time
 
 import numpy as np
+import pickle
 
 from ssn_dataset import SSNDataSet
 from ssn_models import SSN
@@ -22,6 +23,7 @@ parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--data_root', type=str, default='data/rawframes',
                     metavar='PATH', help='path of the rawframes folder')
 parser.add_argument('--save_raw_scores', type=str, default=None)
+parser.add_argument('--save_base_out', type=str, default=None)
 parser.add_argument('--aug_ratio', type=float, default=0.5)
 parser.add_argument('--frame_interval', type=int, default=6)
 parser.add_argument('--test_batchsize', type=int, default=512)
@@ -56,7 +58,7 @@ gpu_list = args.gpus if args.gpus is not None else range(8)
 
 def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
     torch.cuda.set_device(gpu_id)
-    net = SSN(num_class, 2, 5, 2,
+    net = SSN(num_class, -1, 2, 5, 2,
               args.modality, test_mode=True,
               base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs)
     net.load_state_dict(state_dict)
@@ -64,6 +66,7 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
     net.eval()
     net.cuda()
     output_dim = net.test_fc.out_features
+    base_out_dim = net.base_feature_dim
     reorg_stpp = STPPReorgainzed(output_dim, num_class + 1, num_class,
                                  num_class * 2, True, stpp_cfg=stpp_configs)
 
@@ -80,15 +83,19 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
 
         # output.shape == [num_frames, 7791]
         output = torch.zeros((frame_cnt, output_dim)).cuda()
+        base_output = torch.zeros((frame_cnt, base_out_dim)).cuda()
         cnt = 0
         for frames in frames_gen:
             # frames.shape == [frame_batch_size * num_crops * 3, 224, 224]
             # frame_batch_size is 4 by default
             input_var = torch.autograd.Variable(frames.view(-1, length, frames.size(-2), frames.size(-1)).cuda(),
                                                 volatile=True)
-            rst, _ = net(input_var, None, None, None, None)
+            rst, base_out = net(input_var, None, None, None, None)
             sc = rst.data.view(num_crop, -1, output_dim).mean(dim=0)
             output[cnt: cnt + sc.size(0), :] = sc
+            bsc = base_out.data.view(num_crop, -1, base_out_dim).mean(dim=0)
+            base_output[cnt:cnt+bsc.size(0), :] = bsc
+            assert sc.size(0) == bsc.size(0)
             cnt += sc.size(0)
         # act_scores.shape == [num_proposals, K+1]
         # comp_scores.shape == [num_proposals, K]
@@ -101,14 +108,14 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
 
         # perform stpp on scores
         result_queue.put((dataset.video_list[index].id, rel_props.numpy(), act_scores.cpu().numpy(), \
-               comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), output.cpu().numpy()))
+               comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), output.cpu().numpy(), base_output.cpu().numpy()))
 
 
 if __name__ == '__main__':
     ctx = multiprocessing.get_context('spawn')  # this is crucial to using multiprocessing processes with PyTorch
 
     # This net is used to provides setup settings. It is not used for testing.
-    net = SSN(num_class, 2, 5, 2,
+    net = SSN(num_class, -1, 2, 5, 2,
               args.modality, test_mode=True,
               base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs)
 
@@ -169,22 +176,26 @@ if __name__ == '__main__':
 
     proc_start_time = time.time()
     out_dict = {}
+    if args.save_base_out is not None:
+        base_out_f = open(args.save_base_out, 'wb')
+
     for i in range(max_num):
         rst = result_queue.get()
-        out_dict[rst[0]] = rst[1:]
+        vid_id = rst[0]
+        base_out = rst[-1]
+        if args.save_base_out is not None:
+            pickle.dump((vid_id, base_out), base_out_f, pickle.HIGHEST_PROTOCOL)
+        out_dict[rst[0]] = rst[1:-1]
         cnt_time = time.time() - proc_start_time
         print('video {} done, total {}/{}, average {:.04f} sec/video'.format(i, i + 1,
                                                                         max_num,
                                                                         float(cnt_time) / (i + 1)))
+    base_out_f.close()
 
     if args.save_scores is not None:
         save_dict = {k: v[:-1] for k,v in out_dict.items()}
-        import pickle
-
         pickle.dump(save_dict, open(args.save_scores, 'wb'), pickle.HIGHEST_PROTOCOL)
 
     if args.save_raw_scores is not None:
         save_dict = {k: v[-1] for k,v in out_dict.items()}
-        import pickle
-
         pickle.dump(save_dict, open(args.save_raw_scores, 'wb'), pickle.HIGHEST_PROTOCOL)

@@ -66,7 +66,7 @@ class SSN(torch.nn.Module):
 
         self._prepare_base_model(base_model)
 
-        feature_dim = self._prepare_ssn(num_class, num_tasks, stpp_cfg)
+        self.base_feature_dim = self._prepare_ssn(num_class, num_tasks, stpp_cfg)
 
         if self.modality == 'Flow':
             print("Converting the ImageNet model to a flow init model")
