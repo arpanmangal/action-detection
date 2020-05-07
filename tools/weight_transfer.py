@@ -46,15 +46,19 @@ def transfer_weights(base, submodel, save_checkpoint_pth, task_head=False, cls_h
     """
     Transfer weights from submodel to base
     """
-    if cls_head or mid_glcu:
+    if cls_head:
         raise NotImplementedError
+
+    assert task_head or mid_glcu # At-least one is true
+    assert not (task_head and mid_glcu) # Not both should be true
 
     base_model = load_model(base)
     submodel_weights = load_model(submodel)
     
     if task_head:
         for key, weight in submodel_weights.items():
-            base_key = 'module.task_head.' + key
+            if task_head: base_key = 'module.task_head.' + key
+            if mid_glcu: base_key = 'module.glcu.' + key
             if reverse:
                 submodel_weights[key] = base_model['state_dict'][base_key]
             else:
@@ -68,4 +72,4 @@ def transfer_weights(base, submodel, save_checkpoint_pth, task_head=False, cls_h
 
 if __name__ == '__main__':
     args = parse_args()
-    transfer_weights(args.base, args.submodel, args.savepth, task_head=args.task_head, reverse=args.reverse)
+    transfer_weights(args.base, args.submodel, args.savepth, task_head=args.task_head, mid_glcu=args.mid_glcu, reverse=args.reverse)
