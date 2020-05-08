@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from transforms import *
 import torchvision.models
 
+import itertools
 from ops.ssn_ops import Identity, StructuredTemporalPyramidPooling
 
 
@@ -278,28 +279,41 @@ class SSN(torch.nn.Module):
 
             linear_weight = []
             linear_bias = []
-            for m in self.modules():
-                if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
-                    continue
-                elif isinstance(m, torch.nn.Linear):
+            glcu_weight = []
+            glcu_bias = []
+            for m in itertools.chain(self.activity_fc.modules(), self.completeness_fc.modules(), self.regressor_fc.modules()):
+                if isinstance(m, torch.nn.Linear):
                     ps = list(m.parameters())
                     assert len(ps) <= 2
-                    if ps[0].requires_grad:
-                        linear_weight.append(ps[0])
-                    if len(ps) == 2 and ps[1].requires_grad:
+                    linear_weight.append(ps[0])
+                    if len(ps) == 2:
                         linear_bias.append(ps[1])
-                elif isinstance(m, torch.nn.BatchNorm1d):
-                    continue
-                elif isinstance(m, torch.nn.BatchNorm2d):
-                    continue
-                elif len(m._modules) == 0:
-                    if len(list(m.parameters())) > 0:
-                        raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
+                else:
+                    print (m)
+                    raise ValueError("New module type")
+
+            if self.with_glcu:
+                for fc in self.glcu.dfc:
+                    for m in fc.modules():
+                        if isinstance(m, torch.nn.Linear):
+                            ps = list(m.parameters())
+                            assert len(ps) <= 2
+                            glcu_weight.append(ps[0])
+                            if len(ps) == 2:
+                                glcu_bias.append(ps[1])
+                        else:
+                            print (m)
+                            raise ValueError("New module type")
+            
             return [
                 {'params': linear_weight, 'lr_mult': 1, 'decay_mult': 1,
                 'name': "linear_weight"},
                 {'params': linear_bias, 'lr_mult': 2, 'decay_mult': 0,
-                'name': "linear_bias"}
+                'name': "linear_bias"},
+                {'params': glcu_weight, 'lr_mult': 10, 'decay_mult': 1,
+                'name': "glcu_weight"},
+                {'params': glcu_bias, 'lr_mult': 20, 'decay_mult': 0,
+                'name': "glcu_bias"}
             ]
 
         first_conv_weight = []
