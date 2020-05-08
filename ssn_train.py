@@ -35,7 +35,7 @@ def main():
                 args.modality,
                 base_model=args.arch, dropout=args.dropout,
                 stpp_cfg=stpp_configs, bn_mode=args.bn_mode,
-                task_head=args.task_head, glcu=args.glcu)
+                task_head=args.task_head, glcu=args.glcu, additive_glcu=args.additive_glcu)
 
     if args.init_weights:
         if os.path.isfile(args.init_weights):

@@ -16,7 +16,7 @@ class SSN(torch.nn.Module):
                  dropout=0.8,
                  crop_num=1, no_regression=False, test_mode=False,
                  stpp_cfg=(1, (1, 2), 1), bn_mode='frozen',
-                 task_head=False, glcu=False):
+                 task_head=False, glcu=False, additive_glcu=False):
         super(SSN, self).__init__()
         self.modality = modality
         self.num_tasks = num_tasks
@@ -32,6 +32,7 @@ class SSN(torch.nn.Module):
         self.bn_mode=bn_mode
         self.task_head = task_head
         self.glcu = glcu
+        self.additive_glcu = additive_glcu
 
         if self.task_head:
             assert num_tasks > 0
@@ -111,7 +112,7 @@ class SSN(torch.nn.Module):
 
         if self.glcu:
             # Prepare GLCU unit
-            self.glcu = GLCU(feature_dim, num_tasks)
+            self.glcu = GLCU(feature_dim, num_tasks, additive_glcu=self.additive_glcu)
             self.glcu.init_weights()
 
         return feature_dim
@@ -405,7 +406,10 @@ class SSN(torch.nn.Module):
             step_features = base_out.view(num_videos, num_per_video, -1).mean(dim=1)
             gate, glcu_task_pred = self.glcu(step_features)
             gate = gate.repeat(1, num_per_video).view(-1, base_out.size(1))
-            base_out = base_out * gate
+            if self.additive_glcu:
+                base_out = base_out + gate
+            else:
+                base_out = base_out * gate
         else:
             glcu_task_pred = None
 
@@ -574,11 +578,12 @@ class GLCU(nn.Module):
     Global Local Consistency Unit
     """
 
-    def __init__ (self, in_feature_dim, num_tasks, middle_layers=[256], half_unit=False, init_std=0.001):
+    def __init__ (self, in_feature_dim, num_tasks, middle_layers=[256], half_unit=False, additive_glcu=False, init_std=0.001):
         super (GLCU, self).__init__()
 
         self.init_std = init_std
         self.half_unit = half_unit
+        self.additive_glcu = additive_glcu
         self.in_features = in_feature_dim
 
         # Map input to task
@@ -616,9 +621,12 @@ class GLCU(nn.Module):
         len_dfc = len(self.dfc)
         for i in range(len_dfc - 1):
             feat = F.relu(self.dfc[i](feat))
-        feat = F.sigmoid(self.dfc[-1](feat))
+        feat = self.dfc[-1](feat)
 
-        return feat, task_feat
+        if self.additive_glcu:
+            return F.relu(feat), task_feat
+        else:
+            return F.softmax(feat), task_feat
 
 
 class TC(nn.Module):

@@ -12,6 +12,8 @@ parser.add_argument('--task_head', default=False, action='store_true',
                     help='whether to use the MTL task head')
 parser.add_argument('--glcu', default=False, action='store_true',
                     help='whether to use the GLCU unit after backbone')
+parser.add_argument('--additive_glcu', '--addg', default=False, action='store_true',
+                    help='whether to use the GLCU unit in additive mode as against hammond product')
 
 parser.add_argument('--dropout', '--do', default=0.8, type=float,
                     metavar='DO', help='dropout ratio (default: 0.8)')
