@@ -626,8 +626,9 @@ class GLCU(nn.Module):
         if self.additive_glcu:
             return F.relu(feat), task_feat
         else:
-            return F.softmax(feat), task_feat
+            return F.sigmoid(feat), task_feat
 
+    #  remember nn.functional.relu
 
 class TC(nn.Module):
     """
