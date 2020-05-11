@@ -465,8 +465,8 @@ class SSN(torch.nn.Module):
 
         # base_out.shape == [40, 1024]
         base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
-
-        return self.test_fc(base_out), base_out
+        return base_out
+        # return self.test_fc(base_out), base_out
 
     def _get_diff(self, input, keep_rgb=False):
         input_c = 3 if self.modality in ["RGB", "RGBDiff"] else 2

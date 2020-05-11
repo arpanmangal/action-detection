@@ -11,6 +11,7 @@ from ops.ssn_ops import STPPReorgainzed
 from torch import multiprocessing
 from torch.utils import model_zoo
 from ops.utils import get_configs, get_reference_model_url
+import torch.nn.functional as F
 
 
 parser = argparse.ArgumentParser(
@@ -20,6 +21,12 @@ parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('weights', type=str)
 parser.add_argument('save_scores', type=str)
 parser.add_argument('--arch', type=str, default="BNInception")
+parser.add_argument('--task_head', default=False, action='store_true',
+                    help='whether to use the MTL task head')
+parser.add_argument('--glcu', default=False, action='store_true',
+                    help='whether to use the GLCU unit after backbone')
+parser.add_argument('--additive_glcu', '--addg', default=False, action='store_true',
+                    help='whether to use the GLCU unit in additive mode as against hammond product')
 parser.add_argument('--data_root', type=str, default='data/rawframes',
                     metavar='PATH', help='path of the rawframes folder')
 parser.add_argument('--save_raw_scores', type=str, default=None)
@@ -43,6 +50,7 @@ args = parser.parse_args()
 dataset_configs = get_configs(args.dataset)
 
 num_class = dataset_configs['num_class']
+num_tasks = dataset_configs['num_tasks']
 stpp_configs = tuple(dataset_configs['stpp'])
 test_prop_file = 'data/{}_proposal_list.txt'.format(dataset_configs['test_list'])
 
@@ -58,9 +66,10 @@ gpu_list = args.gpus if args.gpus is not None else range(8)
 
 def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
     torch.cuda.set_device(gpu_id)
-    net = SSN(num_class, -1, 2, 5, 2,
+    net = SSN(num_class, num_tasks, 2, 5, 2,
               args.modality, test_mode=True,
-              base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs)
+              base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs,
+              task_head=args.task_head, glcu=args.glcu, additive_glcu=args.additive_glcu)
     net.load_state_dict(state_dict)
     net.prepare_test_fc()
     net.eval()
@@ -80,26 +89,64 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
             length = 10
         elif args.modality == 'RGBDiff':
             length = 18
-
-        # output.shape == [num_frames, 7791]
-        output = torch.zeros((frame_cnt, output_dim)).cuda()
-        base_output = torch.zeros((frame_cnt, base_out_dim)).cuda()
+ 
+        # First get the base_out outputs
+        base_output = torch.autograd.Variable(torch.zeros((num_crop, frame_cnt, base_out_dim)).cuda(),
+                                                volatile=True)
         cnt = 0
         for frames in frames_gen:
             # frames.shape == [frame_batch_size * num_crops * 3, 224, 224]
             # frame_batch_size is 4 by default
             input_var = torch.autograd.Variable(frames.view(-1, length, frames.size(-2), frames.size(-1)).cuda(),
                                                 volatile=True)
-            rst, base_out = net(input_var, None, None, None, None)
+            base_out = net(input_var, None, None, None, None)
+            bsc = base_out.view(num_crop, -1, base_out_dim)
+            base_output[:, cnt:cnt+bsc.size(1), :] = bsc
+            cnt += bsc.size(1)
+
+        n_frames = base_output.size(1)
+        assert frame_cnt == n_frames
+        if net.with_glcu:
+            step_features = base_output.mean(dim=0).mean(dim=0).unsqueeze(0)
+            print ('$$$', step_features.shape, base_output.shape)
+            gate, glcu_task_pred = net.glcu(step_features)
+            glcu_task_pred = glcu_task_pred.squeeze().data.cpu().numpy()
+            gate = gate.repeat(1, num_crop * n_frames).view(num_crop, n_frames, base_out_dim)
+            if net.additive_glcu:
+                base_output = base_output + gate
+            else:
+                base_output = base_output * gate
+        else:
+            glcu_task_pred = None
+
+        # output.shape == [num_frames, 7791]
+        output = torch.zeros((frame_cnt, output_dim)).cuda()
+        cnt = 0
+        for i in range(0, frame_cnt, 4):
+            base_out = base_output[:, i:i+4, :].contiguous().view(-1, base_out_dim)
+            rst = net.test_fc(base_out)
             sc = rst.data.view(num_crop, -1, output_dim).mean(dim=0)
             output[cnt: cnt + sc.size(0), :] = sc
-            bsc = base_out.data.view(num_crop, -1, base_out_dim).mean(dim=0)
-            base_output[cnt:cnt+bsc.size(0), :] = bsc
-            assert sc.size(0) == bsc.size(0)
             cnt += sc.size(0)
+        base_output = base_output.mean(dim=0).data
+
         # act_scores.shape == [num_proposals, K+1]
         # comp_scores.shape == [num_proposals, K]
         act_scores, comp_scores, reg_scores = reorg_stpp.forward(output, prop_ticks, prop_scaling)
+        act_scores = torch.autograd.Variable(act_scores, volatile=True)
+        comp_scores = torch.autograd.Variable(comp_scores, volatile=True)
+
+        if net.task_head:
+            # task_indexer = ((type_data == 0)).nonzero().squeeze()
+            combined_scores = F.softmax(act_scores[:, 1:], dim=1) * torch.exp(comp_scores)
+            # combined_scores = combined_scores.view(num_videos, raw_act_fc.size(0) // num_videos, -1)
+            combined_scores = combined_scores.mean(dim=0).unsqueeze(0)
+            task_pred = net.task_head(combined_scores).squeeze().data.cpu().numpy()
+        else:
+            task_pred = None
+
+        act_scores = act_scores.data
+        comp_scores = comp_scores.data
 
         if reg_scores is not None:
             reg_scores = reg_scores.view(-1, num_class, 2)
@@ -107,17 +154,21 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
             reg_scores[:, :, 1] = reg_scores[:, :, 1] * stats[1, 1] + stats[0, 1]
 
         # perform stpp on scores
-        result_queue.put((dataset.video_list[index].id, rel_props.numpy(), act_scores.cpu().numpy(), \
-               comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), output.cpu().numpy(), base_output.cpu().numpy()))
+        result_queue.put((dataset.video_list[index].id,
+                (rel_props.numpy(), act_scores.cpu().numpy(), comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), 
+                    glcu_task_pred, task_pred),
+                output.cpu().numpy(),
+                base_output.cpu().numpy()))
 
 
 if __name__ == '__main__':
     ctx = multiprocessing.get_context('spawn')  # this is crucial to using multiprocessing processes with PyTorch
 
     # This net is used to provides setup settings. It is not used for testing.
-    net = SSN(num_class, -1, 2, 5, 2,
+    net = SSN(num_class, num_tasks, 2, 5, 2,
               args.modality, test_mode=True,
-              base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs)
+              base_model=args.arch, no_regression=args.no_regression, stpp_cfg=stpp_configs,
+              task_head=args.task_head, glcu=args.glcu, additive_glcu=args.additive_glcu)
 
     if args.test_crops == 1:
         cropping = torchvision.transforms.Compose([
@@ -175,27 +226,24 @@ if __name__ == '__main__':
         index_queue.put(i)
 
     proc_start_time = time.time()
+    if args.save_base_out is not None: base_out_f = open(args.save_base_out, 'wb')
+    if args.save_raw_scores is not None: raw_score_f = open(args.save_raw_scores, 'wb')
     out_dict = {}
-    if args.save_base_out is not None:
-        base_out_f = open(args.save_base_out, 'wb')
 
     for i in range(max_num):
-        rst = result_queue.get()
-        vid_id = rst[0]
-        base_out = rst[-1]
-        if args.save_base_out is not None:
-            pickle.dump((vid_id, base_out), base_out_f, pickle.HIGHEST_PROTOCOL)
-        out_dict[rst[0]] = rst[1:-1]
+        vid_id, rst, output, base_out = result_queue.get()
+        vid_id = vid_id.split('/')[-1]
+        if args.save_base_out is not None: pickle.dump((vid_id, base_out), base_out_f, pickle.HIGHEST_PROTOCOL)
+        if args.save_raw_scores is not None: pickle.dump((vid_id, output), raw_score_f, pickle.HIGHEST_PROTOCOL)
+        out_dict[vid_id] = rst
+
         cnt_time = time.time() - proc_start_time
         print('video {} done, total {}/{}, average {:.04f} sec/video'.format(i, i + 1,
                                                                         max_num,
                                                                         float(cnt_time) / (i + 1)))
-    base_out_f.close()
+    if args.save_base_out is not None: base_out_f.close()
+    if args.save_raw_scores is not None: raw_score_f.close()
 
     if args.save_scores is not None:
-        save_dict = {k: v[:-1] for k,v in out_dict.items()}
+        save_dict = {k: v for k,v in out_dict.items()}
         pickle.dump(save_dict, open(args.save_scores, 'wb'), pickle.HIGHEST_PROTOCOL)
-
-    if args.save_raw_scores is not None:
-        save_dict = {k: v[-1] for k,v in out_dict.items()}
-        pickle.dump(save_dict, open(args.save_raw_scores, 'wb'), pickle.HIGHEST_PROTOCOL)
