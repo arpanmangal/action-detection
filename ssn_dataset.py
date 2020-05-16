@@ -145,7 +145,7 @@ class SSNDataSet(data.Dataset):
                  body_seg=5, aug_seg=2, video_centric=True,
                  new_length=1, modality='RGB',
                  image_tmpl='img_{:05d}.jpg', transform=None,
-                 random_shift=True, test_mode=False,
+                 random_shift=True, test_mode=False, test_time_genbatchsize=4,
                  prop_per_video=8, fg_ratio=1, bg_ratio=1, incomplete_ratio=6,
                  fg_iou_thresh=0.7,
                  bg_iou_thresh=0.01, incomplete_iou_thresh=0.3,
@@ -169,6 +169,7 @@ class SSNDataSet(data.Dataset):
         self.transform = transform
         self.random_shift = random_shift
         self.test_mode = test_mode
+        self.test_time_genbatchsize = test_time_genbatchsize
         self.test_interval = test_interval
 
         self.fg_iou_thresh = fg_iou_thresh
@@ -512,7 +513,7 @@ class SSNDataSet(data.Dataset):
     def __getitem__(self, index):
         real_index = index % len(self.video_list)
         if self.test_mode:
-            return self.get_test_data(self.video_list[real_index], self.test_interval)
+            return self.get_test_data(self.video_list[real_index], self.test_interval, gen_batchsize=self.test_time_genbatchsize)
         else:
             return self.get_training_data(real_index)
 

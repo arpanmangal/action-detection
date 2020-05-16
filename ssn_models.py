@@ -16,7 +16,8 @@ class SSN(torch.nn.Module):
                  dropout=0.8,
                  crop_num=1, no_regression=False, test_mode=False,
                  stpp_cfg=(1, (1, 2), 1), bn_mode='frozen',
-                 task_head=False, glcu=False, additive_glcu=False):
+                 task_head=False, glcu=False, additive_glcu=False,
+                 verbose=True):
         super(SSN, self).__init__()
         self.modality = modality
         self.num_tasks = num_tasks
@@ -33,6 +34,7 @@ class SSN(torch.nn.Module):
         self.task_head = task_head
         self.glcu = glcu
         self.additive_glcu = additive_glcu
+        self.verbose = verbose
 
         if self.task_head:
             assert num_tasks > 0
@@ -44,7 +46,8 @@ class SSN(torch.nn.Module):
         else:
             self.new_length = new_length
 
-        print(("""
+        if self.verbose:
+            print(("""
     Initializing SSN with base model: {}.
     SSN Configurations:
         input_modality:     {}
@@ -119,10 +122,10 @@ class SSN(torch.nn.Module):
 
     def prepare_bn(self):
         if self.bn_mode == 'partial':
-            print("Freezing BatchNorm2D except the first one.")
+            if self.verbose: print("Freezing BatchNorm2D except the first one.")
             self.freeze_count = 2
         elif self.bn_mode == 'frozen':
-            print("Freezing all BatchNorm2D layers")
+            if self.verbose:  print("Freezing all BatchNorm2D layers")
             self.freeze_count = 1
         elif self.bn_mode == 'full':
             self.freeze_count = None
