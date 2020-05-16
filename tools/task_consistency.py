@@ -1,7 +1,7 @@
 """
 Script to implement TC proposed by COIN
 Usage:
-$ python task_consistency.py <Mode> <W_MATRIX_PATH> <IN_PKL> <OUT_PKL> [<TAG_FILE>]
+$ python task_consistency.py <Mode> <W_MATRIX_PATH> <IN_PKL> <OUT_PKL> <TAG_FILE>
 """
 
 import pickle
@@ -9,17 +9,17 @@ import sys
 import numpy as np
 import math
 
-assert len(sys.argv) >= 5
+assert len(sys.argv) == 6
 
 mode = int(sys.argv[1])
 W = np.load(sys.argv[2])
 in_pkl = sys.argv[3]
 out_pkl = sys.argv[4]
-if mode != 0:
-    tag_file = sys.argv[5]
+tag_file = sys.argv[5]
 
 ssn_scores = pickle.load(open(in_pkl, 'rb'))
 pruned_scores = dict()
+task_predictions = dict()
 
 def softmax(scores):
     es = np.exp(scores - scores.max(axis=-1)[..., None])
@@ -42,7 +42,7 @@ def prune_scores(scores, vid_id):
     mask[:, np.where(W.T[task])[0]] = 1
     combined_scores *= mask
 
-    return scores[:1] + (combined_scores, None) + scores[3:]
+    return scores[:1] + (combined_scores, None) + scores[3:], task
 
 def get_task_gt(tag_file):
     """
@@ -68,22 +68,32 @@ def get_task_gt(tag_file):
     
     return task_gt
 
-def task_acc(scores):
+def task_acc(scores, preds):
     """
     Find the task classification accuracy
     """
     gt = get_task_gt(tag_file)
-    pred = {vid_id:np.argmax(vid_scores[-1]) for vid_id, vid_scores in scores.items()}
-
-    combined = np.array([[task, pred[vid_id]] for vid_id,task in gt.items()], dtype=int)
+    combined = np.array([[task, preds[vid_id]] for vid_id, task in gt.items()], dtype=int)
     acc = sum(combined[:, 0] == combined[:, 1]) / combined.shape[0]
     print ('Task Accuracy: %.4f' % (acc * 100))
 
+def task_glcu_acc(scores):
+    """
+    Find the task classification accuracy for GLCU
+    """
+    gt = get_task_gt(tag_file)
+    pred = {vid_id:np.argmax(vid_scores[-2]) for vid_id, vid_scores in scores.items()}
+
+    combined = np.array([[task, pred[vid_id]] for vid_id,task in gt.items()], dtype=int)
+    acc = sum(combined[:, 0] == combined[:, 1]) / combined.shape[0]
+    print ('GLCU Task Accuracy: %.4f' % (acc * 100))
+
 for vid_id, vid_scores in ssn_scores.items():
     vid_id = vid_id.split('/')[-1]
-    pruned_scores[vid_id] = prune_scores(vid_scores, vid_id)
+    pruned_scores[vid_id], task_predictions[vid_id] = prune_scores(vid_scores, vid_id)
 
 pickle.dump(pruned_scores, open(out_pkl, 'wb'), protocol=-1)
+task_acc(pruned_scores, task_predictions)
 
-if mode != 0:
-    task_acc(pruned_scores)
+if mode == 2:
+    task_glcu_acc(pruned_scores)
