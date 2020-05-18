@@ -17,6 +17,17 @@ in_pkl = sys.argv[3]
 out_pkl = sys.argv[4]
 tag_file = sys.argv[5]
 
+if mode == 0:
+    print ("Mode: W")
+elif mode == 1:
+    print ("Mode: MTL")
+elif mode == 2:
+    print ("Mode: GLCU-TH")
+elif mode == 3:
+    print ("Mode: GLCU-G")
+else:
+    raise ValueError("Invalid mode value")
+
 ssn_scores = pickle.load(open(in_pkl, 'rb'))
 pruned_scores = dict()
 task_predictions = dict()
@@ -29,12 +40,17 @@ def prune_scores(scores, vid_id):
     props, act_scores, comp_scores, regs = scores[:4]
     N, K = comp_scores.shape
     combined_scores = softmax(act_scores[:, 1:]) * np.exp(comp_scores)
+    T = W.shape[1]
     if mode == 0:
         step_scores = combined_scores.mean(axis=0).reshape(1, -1)
         assert W.shape[0] == K
         task = np.argmax(np.matmul(step_scores, W))
-    else:
+    elif mode < 3:
+        assert len(scores[-1]) == T
         task = np.argmax(scores[-1])
+    else:
+        assert len(scores[-2]) == T
+        task = np.argmax(scores[-2])
 
     # Mask step scores
     mask = np.full(combined_scores.shape, math.exp(-2))
@@ -75,17 +91,18 @@ def task_acc(scores, preds):
     gt = get_task_gt(tag_file)
     combined = np.array([[task, preds[vid_id]] for vid_id, task in gt.items()], dtype=int)
     acc = sum(combined[:, 0] == combined[:, 1]) / combined.shape[0]
-    print ('Task Accuracy: %.4f' % (acc * 100))
+    print ('Prediction Accuracy: %.4f' % (acc * 100))
 
-def task_glcu_acc(scores):
+def task_glcu_acc(scores, index=-1):
     """
     Find the task classification accuracy for GLCU
     """
     gt = get_task_gt(tag_file)
-    pred = {vid_id:np.argmax(vid_scores[-2]) for vid_id, vid_scores in scores.items()}
+    pred = {vid_id:np.argmax(vid_scores[index]) for vid_id, vid_scores in scores.items()}
 
     combined = np.array([[task, pred[vid_id]] for vid_id,task in gt.items()], dtype=int)
     acc = sum(combined[:, 0] == combined[:, 1]) / combined.shape[0]
+    return acc * 100
     print ('GLCU Task Accuracy: %.4f' % (acc * 100))
 
 for vid_id, vid_scores in ssn_scores.items():
@@ -95,5 +112,8 @@ for vid_id, vid_scores in ssn_scores.items():
 pickle.dump(pruned_scores, open(out_pkl, 'wb'), protocol=-1)
 task_acc(pruned_scores, task_predictions)
 
-if mode == 2:
-    task_glcu_acc(pruned_scores)
+if mode > 0:
+    print ('MTL Task Accuracy:', task_glcu_acc(pruned_scores, -1))
+if mode > 1:
+    print ('GLCU Task Accuracy:', task_glcu_acc(pruned_scores, -2))
+    
