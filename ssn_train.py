@@ -157,7 +157,7 @@ def main():
         adjust_learning_rate(optimizer, epoch, args.lr_steps)
 
         # train for one epoch
-        train(train_loader, model, activity_criterion, completeness_criterion, regression_criterion,
+        train(train_loader, model, num_tasks, activity_criterion, completeness_criterion, regression_criterion,
               task_criterion, glcu_task_criterion, optimizer, epoch)
 
         # evaluate on validation set
@@ -179,7 +179,7 @@ def main():
             is_best)
 
 
-def train(train_loader, model, act_criterion, comp_criterion, regression_criterion, task_criterion, glcu_task_criterion, optimizer, epoch):
+def train(train_loader, model, num_tasks, act_criterion, comp_criterion, regression_criterion, task_criterion, glcu_task_criterion, optimizer, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -216,12 +216,24 @@ def train(train_loader, model, act_criterion, comp_criterion, regression_criteri
         prop_type_var = torch.autograd.Variable(out_prop_type)
         task_target_var = torch.autograd.Variable(out_task_labels.squeeze().cuda(async=True))
 
+        # Task target for GLCU
+        if args.task_target_ratio > 0:
+            y = out_task_labels
+            y_onehot = torch.FloatTensor(y.size(0), num_tasks)
+            y_onehot.zero_()
+            y_onehot.scatter_(1, y, 1)
+            task_target_input_var = torch.autograd.Variable(y_onehot.cuda())
+            task_target_input = (task_target_input_var, args.task_target_ratio)
+        else:
+            task_target_input = None
+
         # compute output
         activity_out, activity_target, \
         completeness_out, completeness_target, \
         regression_out, regression_labels, regression_target, \
         glcu_task_pred, task_pred = model(input_var, scaling_var, target_var,
-                                          reg_target_var, prop_type_var)
+                                          reg_target_var, prop_type_var,
+                                          task_target_input=task_target_input)
 
         act_loss = act_criterion(activity_out, activity_target)
         comp_loss = comp_criterion(completeness_out, completeness_target, ohem_num, comp_group_size)

@@ -371,13 +371,13 @@ class SSN(torch.nn.Module):
              'name': "BN scale/shift"},
         ]
 
-    def forward(self, input, aug_scaling, target, reg_target, prop_type):
+    def forward(self, input, aug_scaling, target, reg_target, prop_type, task_target_input=None):
         if not self.test_mode:
-            return self.train_forward(input, aug_scaling, target, reg_target, prop_type)
+            return self.train_forward(input, aug_scaling, target, reg_target, prop_type, task_target_input)
         else:
             return self.test_forward(input)
 
-    def train_forward(self, input, aug_scaling, target, reg_target, prop_type):
+    def train_forward(self, input, aug_scaling, target, reg_target, prop_type, task_target_input=None):
         """
         For InceptionV3
         input.shape: [num_videos, 216, 299, 299]
@@ -407,7 +407,7 @@ class SSN(torch.nn.Module):
         if self.glcu:
             num_per_video = base_out.size(0) // num_videos
             step_features = base_out.view(num_videos, num_per_video, -1).mean(dim=1)
-            gate, glcu_task_pred = self.glcu(step_features)
+            gate, glcu_task_pred = self.glcu(step_features, task_target_input=task_target_input)
             gate = gate.repeat(1, num_per_video).view(-1, base_out.size(1))
             if self.additive_glcu:
                 base_out = base_out + gate
@@ -611,7 +611,7 @@ class GLCU(nn.Module):
                 nn.init.normal(fc.weight.data, 0, self.init_std)
                 nn.init.constant(fc.bias.data, 0)
 
-    def forward(self, feat):
+    def forward(self, feat, task_target_input=None):
         len_afc = len(self.afc)
         for i in range(len_afc - 1):
             feat = F.relu(self.afc[i](feat))
@@ -621,6 +621,11 @@ class GLCU(nn.Module):
             return task_feat
 
         feat = F.softmax(task_feat, dim=1)
+        if task_target_input is not None:
+            task_input, target_ratio = task_target_input
+            assert feat.size() == task_input.size()
+            feat = (feat * 1.0 + task_input * target_ratio) / (1.0 + target_ratio)
+
         len_dfc = len(self.dfc)
         for i in range(len_dfc - 1):
             feat = F.relu(self.dfc[i](feat))
