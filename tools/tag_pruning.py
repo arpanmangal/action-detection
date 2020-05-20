@@ -22,13 +22,13 @@ def prune_scores(scores, vid_id, task=False):
     if task:
         raise NotImplementedError
 
-    (props, act_scores, comp_scores, regs) = scores
+    (props, act_scores, comp_scores, regs) = scores[:4]
     keep = [idx for idx, p in enumerate(props) if (lo_thres < p[1] - p[0] < hi_thres)]
     if len(keep) == 0:
         print ('video %s is completely useless!' % vid_id)
         return scores # Keep all the elements
 
-    return props[keep, :], act_scores[keep, :], comp_scores[keep, :], regs[keep, :, :]
+    return (props[keep, :], act_scores[keep, :], comp_scores[keep, :], regs[keep, :, :]) + scores[4:]
 
 
 for vid_id, vid_scores in ssn_scores.items():
