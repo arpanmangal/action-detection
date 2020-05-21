@@ -46,6 +46,8 @@ parser.add_argument('--bn_mode', '--bn', default='frozen', type=str,
                     help="the mode of bn layers")
 parser.add_argument('--tune_glcu', '--tg', default=False, action='store_true',
                     help='Whether to freeze backbone and cls_head weights and only to tune GLCU\'s')
+parser.add_argument('--tune_mid_glcu', '--tmg', default=False, action='store_true',
+                    help='Whether to freeze backbone and cls_head weights and only to tune mid-GLCU')
 parser.add_argument('--tune_cls_head', '--tch', default=False, action='store_true',
                     help='Whether to freeze backbone and GLCU weights and only to train cls_head')
 parser.add_argument('--easy_load', '--el', default=False, action='store_true',

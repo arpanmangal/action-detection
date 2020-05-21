@@ -228,12 +228,14 @@ class SSN(torch.nn.Module):
         self.test_fc.weight.data = weight
         self.test_fc.bias.data = bias
 
-    def get_optim_policies(self, tune_glcu, tune_cls_head):
+    def get_optim_policies(self, tune_glcu, tune_cls_head, tune_mid_glcu):
         """
         Tune GLCU is true for fine-tuning only the GLCU weights
         Tune CLS_HEAD is true for fine-tuning only cls-head weights
         """
         assert not (tune_glcu and tune_cls_head)
+        assert not (tune_cls_head and tune_mid_glcu)
+        assert not (tune_glcu and tune_mid_glcu)
 
         if tune_glcu:
             for param in self.parameters():
@@ -319,6 +321,33 @@ class SSN(torch.nn.Module):
                 {'params': glcu_bias, 'lr_mult': 20, 'decay_mult': 0,
                 'name': "glcu_bias"}
             ]
+
+        if tune_mid_glcu:
+            for param in self.base_model.parameters():
+                # Disable gradient computation for all backbone layers
+                param.requires_grad = False
+
+            glcu_weight = []
+            glcu_bias = []
+            for fc in self.glcu.dfc:
+                for m in fc.modules():
+                    if isinstance(m, torch.nn.Linear):
+                        ps = list(m.parameters())
+                        assert len(ps) <= 2
+                        glcu_weight.append(ps[0])
+                        if len(ps) == 2:
+                            glcu_bias.append(ps[1])
+                    else:
+                        print (m)
+                        raise ValueError("New module type")
+            
+            return [
+                {'params': glcu_weight, 'lr_mult': 10, 'decay_mult': 1,
+                'name': "glcu_weight"},
+                {'params': glcu_bias, 'lr_mult': 20, 'decay_mult': 0,
+                'name': "glcu_bias"}
+            ]
+
 
         first_conv_weight = []
         first_conv_bias = []

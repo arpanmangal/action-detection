@@ -28,6 +28,8 @@ def prune_scores(scores, vid_id, task=False):
         print ('video %s is completely useless!' % vid_id)
         return scores # Keep all the elements
 
+    if comp_scores is None:
+        return (props[keep, :], act_scores[keep, :], comp_scores, regs[keep, :, :]) + scores[4:]
     return (props[keep, :], act_scores[keep, :], comp_scores[keep, :], regs[keep, :, :]) + scores[4:]
 
 

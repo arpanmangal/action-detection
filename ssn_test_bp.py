@@ -302,6 +302,8 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
         vid_id, (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred), \
             output, base_output = inference()
 
+        del net
+        
         # perform stpp on scores
         result_queue.put((vid_id,
             (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred),
