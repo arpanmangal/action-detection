@@ -61,12 +61,13 @@ class SSN(torch.nn.Module):
         bn_mode:            {}
         task_head:          {}
         glcu:               {}
+        additive_glcu:      {}
         
         stpp_configs:       {} 
             """.format(base_model, self.modality,
                        self.starting_segment, self.course_segment, self.ending_segment,
                        self.num_segments, self.new_length, self.dropout, 'ON' if self.with_regression else "OFF",
-                       self.bn_mode, self.task_head, self.glcu,
+                       self.bn_mode, self.task_head, self.glcu, self.additive_glcu,
                        stpp_cfg)))
 
         self._prepare_base_model(base_model)

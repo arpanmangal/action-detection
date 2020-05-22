@@ -145,7 +145,8 @@ class SSNDataSet(data.Dataset):
                  body_seg=5, aug_seg=2, video_centric=True,
                  new_length=1, modality='RGB',
                  image_tmpl='img_{:05d}.jpg', transform=None,
-                 random_shift=True, test_mode=False, test_time_genbatchsize=4,
+                 random_shift=True, test_mode=False,
+                 test_time_genbatchsize=4, bp_mode=False,
                  prop_per_video=8, fg_ratio=1, bg_ratio=1, incomplete_ratio=6,
                  fg_iou_thresh=0.7,
                  bg_iou_thresh=0.01, incomplete_iou_thresh=0.3,
@@ -170,6 +171,7 @@ class SSNDataSet(data.Dataset):
         self.random_shift = random_shift
         self.test_mode = test_mode
         self.test_time_genbatchsize = test_time_genbatchsize
+        self.bp_mode = bp_mode
         self.test_interval = test_interval
 
         self.fg_iou_thresh = fg_iou_thresh
@@ -404,7 +406,17 @@ class SSNDataSet(data.Dataset):
         props = video.proposals
         video_id = video.id
         frame_cnt = video.num_frames
-        frame_ticks = np.arange(0, frame_cnt - self.new_length, test_interval, dtype=np.int) + 1
+        if self.bp_mode:
+            # BP mode -> choose exact gen_batchsize frames at once
+            all_frame_ticks = np.arange(0, frame_cnt - self.new_length, 1, dtype=np.int) + 1
+            frame_ticks = all_frame_ticks
+            stride = 1
+            while len(frame_ticks) > gen_batchsize:
+                stride += 1
+                frame_ticks = all_frame_ticks[::stride]
+            gen_batchsize = len(frame_ticks)
+        else:
+            frame_ticks = np.arange(0, frame_cnt - self.new_length, test_interval, dtype=np.int) + 1
 
         num_sampled_frames = len(frame_ticks)
 

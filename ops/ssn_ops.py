@@ -106,18 +106,24 @@ class STPPReorgainzed:
         self.comp_slice = slice(self.act_slice.stop, self.act_slice.stop + self.comp_len * feature_multiplie)
         self.reg_slice = slice(self.comp_slice.stop, self.comp_slice.stop + self.reg_len * feature_multiplie)
 
-    def forward(self, scores, proposal_ticks, scaling):
+    def forward(self, scores, proposal_ticks, scaling, bp_mode=False):
         assert scores.size(1) == self.feat_dim
         n_out = proposal_ticks.size(0)
 
         out_act_scores = torch.zeros((n_out, self.act_len)).cuda()
+        if bp_mode:
+            out_act_scores = torch.autograd.Variable(out_act_scores)
         raw_act_scores = scores[:, self.act_slice]
 
         out_comp_scores = torch.zeros((n_out, self.comp_len)).cuda()
+        if bp_mode:
+            out_comp_scores = torch.autograd.Variable(out_comp_scores)
         raw_comp_scores = scores[:, self.comp_slice]
 
         if self.with_regression:
             out_reg_scores = torch.zeros((n_out, self.reg_len)).cuda()
+            if bp_mode:
+                out_reg_scores = torch.autograd.Variable(out_reg_scores)
             raw_reg_scores = scores[:, self.reg_slice]
         else:
             out_reg_scores = None
@@ -146,7 +152,7 @@ class STPPReorgainzed:
                         pl = int(part_ticks[i])
                         pr = int(part_ticks[i+1])
                         if pr - pl >= 1:
-                            out_scores[index, :] += raw_scores[pl:pr,
+                            out_scores[index, :] = out_scores[index, :] + raw_scores[pl:pr,
                                                     offset * score_len: (offset + 1) * score_len].mean(dim=0) * s
                         offset += 1
 

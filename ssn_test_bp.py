@@ -30,7 +30,7 @@ parser.add_argument('--glcu', default=True, action='store_true',
 parser.add_argument('--additive_glcu', '--addg', default=False, action='store_true',
                     help='whether to use the GLCU unit in additive mode as against hammond product')
 parser.add_argument('--bp', default=0, type=int, help='Number of BP steps for GLCU')
-parser.add_argument('--bp_num_frames', default=80, type=int, help='Number of frames from which to predict GLCU task')
+parser.add_argument('--bp_num_frames', default=220, type=int, help='Number of frames from which to predict GLCU task')
 parser.add_argument('--lr', default=0.00001, type=float, help='LR for BP')
 parser.add_argument('--data_root', type=str, default='data/rawframes',
                     metavar='PATH', help='path of the rawframes folder')
@@ -90,16 +90,15 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
         reorg_stpp = STPPReorgainzed(output_dim, num_class + 1, num_class,
                                  num_class * 2, True, stpp_cfg=stpp_configs)
 
-        def inference(train_time=False):
+        def inference():
             """
             Do simple inference to get predictions
-            train_time=True refers to KL loss backpropagation
             """
-            inf_dataset = kl_train_dataset if train_time else dataset
+            inf_dataset = dataset
             net.eval()
             frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = inf_dataset[index]
             
-            num_crop = 1 if train_time else args.test_crops
+            num_crop = args.test_crops
             length = 3
             if args.modality == 'Flow':
                 length = 10
@@ -154,10 +153,6 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             combined_scores = combined_scores.mean(dim=0).unsqueeze(0)
             task_pred = F.softmax(net.task_head(combined_scores).squeeze(), dim=0).data.cpu().numpy()
 
-            if train_time:
-                torch.cuda.empty_cache() # To empty the cache from previous iterations
-                return task_pred
-
             act_scores = act_scores.data
             comp_scores = comp_scores.data
 
@@ -175,11 +170,22 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                     output.cpu().numpy(),
                     base_output.cpu().numpy()))
 
-        def update_net(optimizer, task_pred):
+        def KL(P, Q):
+            """
+            find the KL divergence loss between P and Q
+            """
+            assert P.size() == Q.size()
+            # To prevent divide by zero
+            Q = Q + 1e-15
+            return torch.sum(P * torch.log(P / Q))
+
+        def update_net(optimizer):
             """
             # 1 iteration of bp
             """
+            assert kl_train_dataset.bp_mode
             frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = kl_train_dataset[index]
+
             optimizer.zero_grad()
             
             num_crop = 1
@@ -189,45 +195,46 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             elif args.modality == 'RGBDiff':
                 length = 18
  
-            tot_loss = 0.0
-            cnt = 0
-            first_time = True
             for frames in frames_gen:
-                if len(frames) < args.bp_num_frames * length and not first_time:
-                    # No use to predict using the end frames
-                    break
-                else:
-                    assert len(frames) == args.bp_num_frames * length or first_time
-                # frames.shape == [frame_batch_size * num_crops * 3, 224, 224]
-                # frame_batch_size is 4 by default
+                # frames.shape == [frame_batch_size * num_crop * 3, 224, 224]
+                assert len(frames) == length * frame_cnt
                 input_var = torch.autograd.Variable(frames.view(-1, length, frames.size(-2), frames.size(-1)).cuda())
-                base_out = net(input_var, None, None, None, None).mean(dim=0).unsqueeze(0)
-                _, glcu_task_pred = net.glcu(base_out)
-                glcu_task_pred = F.softmax(glcu_task_pred, dim=1)
+                base_out = net(input_var, None, None, None, None)
+                assert base_out.size(0) == frame_cnt and base_out.size(1) == base_out_dim
+                step_features = base_out.mean(dim=0).unsqueeze(0)
+                gate, glcu_task_pred = net.glcu(step_features)
+                gate = gate.repeat(1, frame_cnt).view(frame_cnt, base_out_dim)
+                assert glcu_task_pred.size(0) == 1
+                glcu_task_pred = F.softmax(glcu_task_pred.squeeze(), dim=0)
+                if net.additive_glcu:
+                    base_out = base_out + gate
+                else:
+                    base_out = base_out * gate
 
-                target = torch.autograd.Variable(torch.from_numpy(task_pred).cuda().unsqueeze(0))
-                loss = F.kl_div(glcu_task_pred.log(), target, size_average=False)
+                output = net.test_fc(base_out)
+                assert output.size(0) == frame_cnt and output.size(1) == output_dim
+                act_scores, comp_scores, reg_scores = reorg_stpp.forward(output, prop_ticks, prop_scaling, bp_mode=True)
+
+                # Task Head
+                combined_scores = F.softmax(act_scores[:, 1:], dim=1) * torch.exp(comp_scores)
+                combined_scores = combined_scores.mean(dim=0).unsqueeze(0)
+                task_pred = net.task_head(combined_scores)
+                assert task_pred.size(0) == 1
+                task_pred = F.softmax(net.task_head(combined_scores).squeeze(), dim=0)
+
+                loss = KL(task_pred, glcu_task_pred)
                 loss.backward()
-                tot_loss += tot_loss + float(loss.data)
                 torch.cuda.empty_cache() # To empty the cache from previous iterations
-                cnt += 1
-                first_time = False
-
-            for g in optimizer.param_groups:
-                for p in g['params']:
-                    p.grad /= cnt
+                break
 
             optimizer.step()
             optimizer.zero_grad()
             torch.cuda.empty_cache()
 
-            return (tot_loss / cnt)
+            return float(loss.data), frame_cnt
 
         losses = []
         for bp in range(args.bp):
-            net.eval()
-            task_pred = inference(train_time=True)
-
             # Freeze heads and create optimizer
             net.train()
             normal_weight = []
@@ -285,25 +292,23 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             optimizer = optim.SGD(params, lr=args.lr, momentum=0.9)
             optimizer.zero_grad()
 
-            loss = update_net(optimizer, task_pred)
+            loss = update_net(optimizer)
             losses.append(loss)
 
         print('-------------------------')
+        print ('#frames: ', losses[0][1])
         for idx, loss in enumerate(losses):
-            print ('%d-i%d: KL Loss' % (index, idx), loss)
+            print ('%d-i%d: KL Loss' % (index, idx), loss[0])
         print('-------------------------')
         sys.stdout.flush()
 
         # Final inference
-        sys.stdout.flush()
-
-        # break
         net.eval()
         vid_id, (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred), \
             output, base_output = inference()
 
         del net
-        
+
         # perform stpp on scores
         result_queue.put((vid_id,
             (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred),
@@ -371,7 +376,8 @@ if __name__ == '__main__':
                          aug_seg=2, body_seg=5,
                          image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB",
                                                                           "RGBDiff"] else args.flow_pref + "{}_{:05d}.jpg",
-                         test_mode=True, test_interval=args.frame_interval, test_time_genbatchsize=args.bp_num_frames,
+                         test_mode=True, test_interval=args.frame_interval, 
+                         test_time_genbatchsize=args.bp_num_frames, bp_mode=True,
                          transform=torchvision.transforms.Compose([
                              single_cropping,
                              Stack(roll=(args.arch in ['BNInception', 'InceptionV3'])),
