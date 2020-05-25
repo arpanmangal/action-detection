@@ -1,0 +1,182 @@
+Domains,Targets
+Nursing and Care,RemoveBlackheadsWithGlue
+Nursing and Care,WashHair
+Nursing and Care,ShaveBeard
+Nursing and Care,WearContactLenses
+Nursing and Care,UseEarplugs
+Nursing and Care,PutOnHairExtensions
+Nursing and Care,WashDog
+Nursing and Care,PerformCPR
+Nursing and Care,GiveAnIntramuscularInjection
+Nursing and Care,BandageDogPaw
+Nursing and Care,DrawBlood
+Nursing and Care,BandageHead
+Nursing and Care,UseEpinephrineAuto-injector
+Nursing and Care,UseNetiPot
+Vehicle,ParkParallel
+Vehicle,ChangeBikeTires
+Vehicle,ChangeBikeChain
+Vehicle,ChangeCarTire
+Vehicle,UseJack
+Vehicle,PolishCar
+Vehicle,FuelCar
+Vehicle,ReplaceCarFuse
+Vehicle,ReplaceRearviewMirrorGlass
+Vehicle,TieBoatToDock
+Vehicle,ReplaceAWiperHead
+Vehicle,RemoveScratchesFromWindshield
+Vehicle,PumpUpBicycleTire
+Vehicle,PatchBikeInnerTube
+Vehicle,InstallLicensePlateFrame
+Vehicle,ReplaceTyreValveStem
+Vehicle,InstallBicycleRackToCar
+Vehicle,ReplaceCarWindow
+Leisure and Performance,PrepareCanvas
+Leisure and Performance,ChangeGuitarStrings
+Leisure and Performance,ReplaceDrumhead
+Leisure and Performance,DoLinoPrinting
+Leisure and Performance,PrepareSumiInk
+Leisure and Performance,PerformPaperToMoneyTrick
+Leisure and Performance,PerformVanishingGlassTrick
+Leisure and Performance,CutAndRestoreRopeTrick
+Leisure and Performance,MakePaperEasterBaskets
+Leisure and Performance,MakePaperWindMill
+Leisure and Performance,PitchATent
+Leisure and Performance,BlowSugar
+Leisure and Performance,MakeChineseLantern
+Leisure and Performance,RaiseFlag
+Leisure and Performance,PlayFrisbeeWithADog
+Leisure and Performance,OpenChampagneBottle
+Leisure and Performance,CarvePumpkin
+Gadgets,MakeRJ45Cable
+Gadgets,LoadGreaseGun
+Gadgets,RefillMechanicalPencils
+Gadgets,RefillFountainPen
+Gadgets,RefillAStapler
+Gadgets,OpenALockWithPaperclips
+Gadgets,ReplaceBatteryOnKeyToCar
+Gadgets,FixLaptopScreenScratches
+Gadgets,ReplaceMobileScreenProtector
+Gadgets,ReplaceSIMCard
+Gadgets,ChangeMobilePhoneBattery
+Gadgets,ReplaceCDDriveWithSSD
+Gadgets,RewrapBattery
+Gadgets,MakeWirelessEarbuds
+Gadgets,ReplaceSewingMachineNeedle
+Gadgets,ChangeBatteryOfWatch
+Gadgets,ReplaceBatteryOnTVControl
+Gadgets,RefillALighter
+Gadgets,ResizeWatchBand
+Gadgets,OperateFireExtinguisher
+Gadgets,UseTappingGun
+Gadgets,InstallIpadScreenProtector
+Electrical Appliance,ChangeTonerCartridge
+Electrical Appliance,RefillCartridge
+Electrical Appliance,AssembleDesktopPC
+Electrical Appliance,ReplaceBladeOfASaw
+Electrical Appliance,UseSoyMilkMaker
+Electrical Appliance,ReplaceFilterForAirPurifier
+Electrical Appliance,ReplaceElectricalOutlet
+Electrical Appliance,ReplaceLightSocket
+Electrical Appliance,ReplaceABulb
+Electrical Appliance,InstallCeilingFan
+Electrical Appliance,ArcWeld
+Electrical Appliance,ReplaceGraphicsCard
+Electrical Appliance,UseVendingMachine
+Electrical Appliance,ReplaceRefrigeratorWaterFilter
+Electrical Appliance,ReplaceHardDisk
+Electrical Appliance,ReplaceMemoryChip
+Electrical Appliance,CleanLaptopKeyboard
+Electrical Appliance,ReplaceLaptopScreen
+Electrical Appliance,UseSewingMachine
+Furniture and Decoration,AssembleSofa
+Furniture and Decoration,AssembleBed
+Furniture and Decoration,AssembleCabinet
+Furniture and Decoration,InstallAirConditioner
+Furniture and Decoration,InstallShowerHead
+Furniture and Decoration,AssembleOfficeChair
+Furniture and Decoration,LubricateALock
+Furniture and Decoration,InstallCurtain
+Furniture and Decoration,ReplaceDoorKnob
+Furniture and Decoration,InstallWoodFlooring
+Furniture and Decoration,InstallCeramicTile
+Furniture and Decoration,InstallClosestool
+Furniture and Decoration,ReplaceFaucet
+Furniture and Decoration,ReplaceToiletSeat
+Science and Craft,MakeFlowerCrown
+Science and Craft,WrapGiftBox
+Science and Craft,MakeSoap
+Science and Craft,MakeCandle
+Science and Craft,MakePaperDice
+Science and Craft,MakeFlowerPress
+Science and Craft,MakeSlimeWithGlue
+Science and Craft,PasteCarSticker
+Science and Craft,SetUpAHamsterCage
+Science and Craft,UseVolumetricFlask
+Science and Craft,HangWallpaper
+Science and Craft,UseAnalyticalBalance
+Science and Craft,PrepareStandardSolution
+Science and Craft,UseVolumetricPipette
+Science and Craft,UseTripleBeamBalance
+Pets and Fruit,Sow
+Pets and Fruit,Graft
+Pets and Fruit,Transplant
+Pets and Fruit,PlantTree
+Pets and Fruit,CutMango
+Pets and Fruit,CutGrapeFruit
+Pets and Fruit,CutCantaloupe
+Drink and Snack,MakeSalad
+Drink and Snack,MakeCocktail
+Drink and Snack,MakeOrangeJuice
+Drink and Snack,MakeMatchaTea
+Drink and Snack,MakeStrawberrySmoothie
+Drink and Snack,MakeSugarCoatedHaws
+Drink and Snack,MakeCookie
+Drink and Snack,MakeChocolate
+Drink and Snack,MakeHomemadeIceCream
+Drink and Snack,MakeHummus
+Drink and Snack,RoastChestnut
+Drink and Snack,MakeTea
+Drink and Snack,MakeCoffee
+Dish,MakeSandwich
+Dish,MakePizza
+Dish,MakeFrenchFried
+Dish,UseToaster
+Dish,MakeBurger
+Dish,MakePickles
+Dish,CleanFish
+Dish,CleanShrimp
+Dish,MakeSalmon
+Dish,CookOmelet
+Dish,UseRiceCookerToCookRice
+Dish,SmashGarlic
+Dish,BoilNoodles
+Dish,MakeLambKebab
+Dish,WrapZongzi
+Dish,MakeYoutiao
+Sport,PractisePoleVault
+Sport,PractiseTripleJump
+Sport,PractiseWeightLift
+Sport,PractiseSkiingAerials
+Sport,PlayCurling
+Sport,GluePingPongRubber
+Sport,ThrowHammer
+Sport,AttendNBASkillsChallenge
+Sport,PractiseKarate
+Sport,WearShinGuards
+Housework,IronClothes
+Housework,PackSleepingBag
+Housework,CleanWoodenFloor
+Housework,CleanCementFloor
+Housework,CleanToilet
+Housework,CleanRustyPot
+Housework,WashDish
+Housework,CleanBathtub
+Housework,MakeBed
+Housework,PutOnQuiltCover
+Housework,UnclogSinkWithBakingSoda
+Housework,CleanLeatherSeat
+Housework,DrillHole
+Housework,CleanHamsterCage
+Housework,RemoveCrayonFromWalls
+
