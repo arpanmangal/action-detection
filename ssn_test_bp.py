@@ -22,6 +22,7 @@ parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14', 
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('weights', type=str)
 parser.add_argument('save_scores', type=str)
+parser.add_argument('--test_prop_file', type=str, default=None, help='Path of test TAG file. If None will be taken from configs')
 parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--task_head', default=True, action='store_true',
                     help='whether to use the MTL task head')
@@ -60,7 +61,9 @@ dataset_configs = get_configs(args.dataset)
 num_class = dataset_configs['num_class']
 num_tasks = dataset_configs['num_tasks']
 stpp_configs = tuple(dataset_configs['stpp'])
-test_prop_file = 'data/{}_proposal_list.txt'.format(dataset_configs['test_list'])
+if args.test_prop_file is None:
+    args.test_prop_file = dataset_configs['test_list']
+test_prop_file = 'data/{}_proposal_list.txt'.format(args.test_prop_file)
 
 if args.modality == 'RGB':
     data_length = 1
