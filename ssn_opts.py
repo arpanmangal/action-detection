@@ -16,6 +16,8 @@ parser.add_argument('--additive_glcu', '--addg', default=False, action='store_tr
                     help='whether to use the GLCU unit in additive mode as against hammond product')
 parser.add_argument('--task_target_ratio', '--ttr', default=0, type=int,
                     help='Whether to give GT task as input to GLCU and to what ratio 1:?')
+parser.add_argument('--use_full_task_target', '--utt', default=False, action='store_true',
+                    help='Whether to give GT task as input to GLCU (equivalent to ttr of inf)')
 
 parser.add_argument('--dropout', '--do', default=0.8, type=float,
                     metavar='DO', help='dropout ratio (default: 0.8)')

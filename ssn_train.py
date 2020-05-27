@@ -217,13 +217,15 @@ def train(train_loader, model, num_tasks, act_criterion, comp_criterion, regress
         task_target_var = torch.autograd.Variable(out_task_labels.squeeze().cuda(async=True))
 
         # Task target for GLCU
-        if args.task_target_ratio > 0:
+        if args.use_full_task_target:
+            assert args.task_target_ratio == 0
+        if args.use_full_task_target or args.task_target_ratio > 0:
             y = out_task_labels
             y_onehot = torch.FloatTensor(y.size(0), num_tasks)
             y_onehot.zero_()
             y_onehot.scatter_(1, y, 1)
             task_target_input_var = torch.autograd.Variable(y_onehot.cuda())
-            task_target_input = (task_target_input_var, args.task_target_ratio)
+            task_target_input = (task_target_input_var, args.use_full_task_target, args.task_target_ratio)
         else:
             task_target_input = None
 

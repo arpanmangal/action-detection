@@ -652,9 +652,12 @@ class GLCU(nn.Module):
 
         feat = F.softmax(task_feat, dim=1)
         if task_target_input is not None:
-            task_input, target_ratio = task_target_input
+            task_input, use_full_task_target, target_ratio = task_target_input
             assert feat.size() == task_input.size()
-            feat = (feat * 1.0 + task_input * target_ratio) / (1.0 + target_ratio)
+            if use_full_task_target:
+                feat = task_input
+            else:
+                feat = (feat * 1.0 + task_input * target_ratio) / (1.0 + target_ratio)
 
         len_dfc = len(self.dfc)
         for i in range(len_dfc - 1):
