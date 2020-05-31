@@ -311,14 +311,15 @@ class SSN(torch.nn.Module):
         self.test_fc.bias.data = bias
 
 
-    def get_optim_policies(self, tune_glcu, tune_cls_head, tune_mid_glcu):
+    def get_optim_policies(self, tune_glcu, tune_cls_head, tune_mid_glcu, tune_skip_glcu):
         """
         Tune GLCU is true for fine-tuning only the GLCU weights
         Tune CLS_HEAD is true for fine-tuning only cls-head weights
         """
-        assert not (tune_glcu and tune_cls_head)
-        assert not (tune_cls_head and tune_mid_glcu)
-        assert not (tune_glcu and tune_mid_glcu)
+        assert len([b for b in [tune_glcu, tune_cls_head, tune_mid_glcu, tune_skip_glcu] if b]) <= 1
+        # assert not (tune_glcu and tune_cls_head)
+        # assert not (tune_cls_head and tune_mid_glcu)
+        # assert not (tune_glcu and tune_mid_glcu)
 
         if tune_glcu:
             for param in self.parameters():
@@ -335,6 +336,32 @@ class SSN(torch.nn.Module):
             return [
                 {'params': parameters, 'lr_mult': 1, 'decay_mult': 1,
                 'name': "glcu_parameters"}
+            ]
+
+        if tune_skip_glcu:
+            for param in self.base_model.parameters():
+                # Disable gradient computation for all backbone layers
+                param.requires_grad = False
+
+            glcu_weight = []
+            glcu_bias = []
+            for m in itertools.chain(self.glcu_asc.modules(), self.glcu_dsc_act.modules(), self.glcu_dsc_comp.modules(), self.glcu_dsc_reg.modules()):
+                if isinstance(m, torch.nn.Linear):
+                    ps = list(m.parameters())
+                    assert len(ps) <= 2
+                    glcu_weight.append(ps[0])
+                    if len(ps) == 2:
+                        glcu_bias.append(ps[1])
+                elif len(m._modules) == 0:
+                    if len(list(m.parameters())) > 0:
+                        print (m)
+                        raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
+            
+            return [
+                {'params': glcu_weight, 'lr_mult': 1, 'decay_mult': 1,
+                'name': "glcu_weight"},
+                {'params': glcu_bias, 'lr_mult': 2, 'decay_mult': 0,
+                'name': "glcu_bias"}
             ]
 
         if tune_cls_head:

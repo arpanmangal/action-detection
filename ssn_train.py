@@ -64,7 +64,7 @@ def main():
     scale_size = model.scale_size
     input_mean = model.input_mean
     input_std = model.input_std
-    policies = model.get_optim_policies(args.tune_glcu, args.tune_cls_head, args.tune_mid_glcu)
+    policies = model.get_optim_policies(args.tune_glcu, args.tune_cls_head, args.tune_mid_glcu, args.tune_skip_glcu)
     train_augmentation = model.get_augmentation()
 
     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
