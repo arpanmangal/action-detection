@@ -16,7 +16,8 @@ class SSN(torch.nn.Module):
                  dropout=0.8,
                  crop_num=1, no_regression=False, test_mode=False,
                  stpp_cfg=(1, (1, 2), 1), bn_mode='frozen',
-                 task_head=False, glcu=False, additive_glcu=False,
+                 task_head=False, glcu_skip=False,
+                 glcu=False, additive_glcu=False,
                  verbose=True):
         super(SSN, self).__init__()
         self.modality = modality
@@ -32,14 +33,18 @@ class SSN(torch.nn.Module):
         self.test_mode = test_mode
         self.bn_mode=bn_mode
         self.task_head = task_head
+        self.glcu_skip = glcu_skip
         self.glcu = glcu
         self.additive_glcu = additive_glcu
         self.verbose = verbose
 
         if self.task_head:
             assert num_tasks > 0
-        if self.glcu:
+        assert not (self.glcu and self.glcu_skip)
+        if self.glcu or self.glcu_skip:
             assert self.task_head # Task head is necessary for having glcu
+        if self.additive_glcu:
+            assert self.glcu
 
         if new_length is None:
             self.new_length = 1 if modality == "RGB" else 5
@@ -60,6 +65,7 @@ class SSN(torch.nn.Module):
         loc. regression:    {}
         bn_mode:            {}
         task_head:          {}
+        glcu_skip:          {}
         glcu:               {}
         additive_glcu:      {}
         
@@ -67,7 +73,7 @@ class SSN(torch.nn.Module):
             """.format(base_model, self.modality,
                        self.starting_segment, self.course_segment, self.ending_segment,
                        self.num_segments, self.new_length, self.dropout, 'ON' if self.with_regression else "OFF",
-                       self.bn_mode, self.task_head, self.glcu, self.additive_glcu,
+                       self.bn_mode, self.task_head, self.glcu_skip, self.glcu, self.additive_glcu,
                        stpp_cfg)))
 
         self._prepare_base_model(base_model)
@@ -118,6 +124,13 @@ class SSN(torch.nn.Module):
             # Prepare GLCU unit
             self.glcu = GLCU(feature_dim, num_tasks, additive_glcu=self.additive_glcu)
             self.glcu.init_weights()
+
+        if self.glcu_skip:
+            # Prepare GLCU unit across the classifier
+            self.glcu_asc = HalfGLCU(self.stpp.activity_feat_dim(), num_tasks, middle_layers=[256])
+            self.glcu_dsc_act = HalfGLCU(num_tasks, num_class + 1, bias=False)
+            self.glcu_dsc_comp = HalfGLCU(num_tasks, num_class, bias=False)
+            self.glcu_dsc_reg = HalfGLCU(num_tasks, 2 * num_class, bias=False)
 
         return feature_dim
 
@@ -203,7 +216,8 @@ class SSN(torch.nn.Module):
                     m.bias.requires_grad = False
         
     def prepare_test_fc(self):
-
+        # Test-time STPP+Classifier
+        assert not self.glcu_skip
         self.test_fc = nn.Linear(self.activity_fc.in_features,
                                  self.activity_fc.out_features
                                  + self.completeness_fc.out_features * self.stpp.feat_multiplier
@@ -228,6 +242,74 @@ class SSN(torch.nn.Module):
 
         self.test_fc.weight.data = weight
         self.test_fc.bias.data = bias
+
+    def prepare_test_fc_skip_glcu(self):
+        # Test-time STPP+Classifier for skip-glcu
+        # test_fc will also take the task as input now
+        assert self.glcu_skip
+        self.test_fc = nn.Linear(self.activity_fc.in_features + self.num_tasks,
+                                 self.activity_fc.out_features
+                                 + self.completeness_fc.out_features * self.stpp.feat_multiplier
+                                 + (self.regressor_fc.out_features * self.stpp.feat_multiplier if self.with_regression else 0))
+        """
+        reorganizing act weight:
+        [W_A] -> [W_A | W_T]
+        """
+        reorg_act_weight = torch.cat((self.activity_fc.weight.data, self.glcu_asc.weight.data), dim=1)
+        reorg_act_bias = self.activity_fc.bias.data
+
+        """
+        reorganizing comp weight:
+        stpp_feat_multiplier == 3
+        self.completeness_fc.weight.shape = [num_classes, 3 * 1024]
+        after doing a view: [num_classes, 3, 1024]
+        after transpose: [3, num_classes, 1024]
+        after view: [3 * num_classes, 1024]
+        i.e. transformed from [W1 | W2 | W3] -> [
+                                                  W1
+                                                  W2
+                                                  W3
+                                                ]
+        With glcu_skip, 
+        transforming from [W1 | W2 | W3] -> [
+                                                  W1 | W_T / 3
+                                                  W2 | W_T / 3
+                                                  W3 | W_T / 3
+                                                ]
+        """
+        reorg_comp_weight = self.completeness_fc.weight.data.view(
+            self.completeness_fc.out_features, self.stpp.feat_multiplier, self.activity_fc.in_features).transpose(0, 1)\
+            .contiguous().view(-1, self.activity_fc.in_features)
+        stacked_comp_WT_by3 = self.glcu_dsc_comp.repeat(stpp_feat_multiplier, 1).view(-1, self.num_tasks) / float(stpp_feat_multiplier)
+        reorg_comp_weight = torch.cat((reorg_comp_weight, stacked_comp_WT_by3), dim=1)
+        reorg_comp_bias = self.completeness_fc.bias.data.view(1, -1).expand(
+            self.stpp.feat_multiplier, self.completeness_fc.out_features).contiguous().view(-1) / self.stpp.feat_multiplier
+
+        weight = torch.cat((reorg_act_weight, reorg_comp_weight))
+        bias = torch.cat((reorg_act_bias, reorg_comp_bias))
+
+        if self.with_regression:
+            """
+            reorganizing reg weight:
+            transforming from [W1 | W2 | W3] -> [
+                                                  W1 | W_T / 3
+                                                  W2 | W_T / 3
+                                                  W3 | W_T / 3
+                                                ]
+            """
+            reorg_reg_weight = self.regressor_fc.weight.data.view(
+                self.regressor_fc.out_features, self.stpp.feat_multiplier, self.activity_fc.in_features).transpose(0, 1) \
+                .contiguous().view(-1, self.activity_fc.in_features)
+            stacked_reg_WT_by3 = self.glcu_dsc_reg.repeat(stpp_feat_multiplier, 1).view(-1, self.num_tasks) / float(stpp_feat_multiplier)
+            reorg_reg_weight = torch.cat((reorg_reg_weight, stacked_reg_WT_by3), dim=1)
+            reorg_reg_bias = self.regressor_fc.bias.data.view(1, -1).expand(
+                self.stpp.feat_multiplier, self.regressor_fc.out_features).contiguous().view(-1) / self.stpp.feat_multiplier
+            weight = torch.cat((weight, reorg_reg_weight))
+            bias = torch.cat((bias, reorg_reg_bias))
+
+        self.test_fc.weight.data = weight
+        self.test_fc.bias.data = bias
+
 
     def get_optim_policies(self, tune_glcu, tune_cls_head, tune_mid_glcu):
         """
@@ -434,6 +516,7 @@ class SSN(torch.nn.Module):
         base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
 
         # Add GLCU unit
+        glcu_task_pred = None
         if self.glcu:
             num_per_video = base_out.size(0) // num_videos
             step_features = base_out.view(num_videos, num_per_video, -1).mean(dim=1)
@@ -443,8 +526,6 @@ class SSN(torch.nn.Module):
                 base_out = base_out + gate
             else:
                 base_out = base_out * gate
-        else:
-            glcu_task_pred = None
 
         # activity_ft.shape = [num_videos * 8, 1024]
         # completeness_ft.shape = [num_videos * 8, 3072]
@@ -452,10 +533,24 @@ class SSN(torch.nn.Module):
                                                                          self.starting_segment + self.course_segment,
                                                                          self.num_segments])
 
+        # Add GLCU unit
+        if self.glcu_skip:
+            num_per_video = activity_ft.size(0) // num_videos
+            # Ascending phase
+            step_features = activity_ft.view(num_videos, num_per_video, -1).mean(dim=1)
+            glcu_task_pred = self.glcu_asc(step_features)
+            
         # raw_act_fc.shape = [num_videos * 8, 780]. 780 == K+1 == Num Classes
         # raw_comp_fc.shape = [num_videos * 8, 779]
         raw_act_fc = self.activity_fc(activity_ft)
         raw_comp_fc = self.completeness_fc(completeness_ft)
+        if self.glcu_skip:
+            # Descending phase of skip-GLCU
+            task_input = task_target_input if task_target_input is not None else glcu_task_pred
+            act_refinement = self.glcu_dsc_act(task_input).repeat(1, num_per_video).view(-1, raw_act_fc.size(1))
+            comp_refinement = self.glcu_dsc_comp(task_input).repeat(1, num_per_video).view(-1, raw_comp_fc.size(1))
+            raw_act_fc = raw_act_fc + act_refinement
+            raw_comp_fc = raw_comp_fc + comp_refinement
 
         # Add Task Head
         if self.task_head:
@@ -476,6 +571,12 @@ class SSN(torch.nn.Module):
             reg_target = reg_target.view(-1, 2)
             reg_indexer = (type_data == 0).nonzero().squeeze()
             raw_regress_fc = self.regressor_fc(completeness_ft).view(-1, self.completeness_fc.out_features, 2)
+            if self.glcu_skip:
+                # Descending phase of skip-GLCU
+                task_input = task_target_input if task_target_input is not None else glcu_task_pred
+                reg_refinement = self.glcu_dsc_reg(task_input).repeat(1, num_per_video).view(-1, raw_regress_fc.size(1), raw_regress_fc.size(2))
+                raw_regress_fc = raw_regress_fc + reg_refinement
+
             return raw_act_fc[act_indexer, :], target[act_indexer], \
                    raw_comp_fc[comp_indexer, :], target[comp_indexer], \
                    raw_regress_fc[reg_indexer, :, :], target[reg_indexer], reg_target[reg_indexer, :], \
@@ -591,7 +692,11 @@ class SSN(torch.nn.Module):
 
     @property
     def with_glcu(self):
-        return hasattr(self, 'glcu') and self.glcu 
+        return self.with_glcu_skip or (hasattr(self, 'glcu') and self.glcu)
+
+    @property
+    def with_glcu_skip(self):
+        return hasattr(self, 'glcu_skip') and self.glcu_skip 
 
     def get_augmentation(self):
         if self.modality == 'RGB':
@@ -684,3 +789,36 @@ class TC(nn.Module):
     def forward(self, step_scores):
         W = torch.autograd.Variable(torch.FloatTensor(self.W).cuda())
         return torch.mm(step_scores, W)
+
+
+class HalfGLCU(nn.Module):
+    """
+    Either phase of the GLCU
+    Simple MLP
+    """
+    def __init__ (self, in_feature_dim, out_feature_dim, middle_layers=[], bias=True, init_std=0.0001):
+        super (HalfGLCU, self).__init__()
+
+        self.init_std = init_std
+        self.in_features = in_feature_dim
+        self.out_features = out_feature_dim
+
+        # Map input to task
+        self.layers = [in_feature_dim] + middle_layers + [out_feature_dim]
+        self.fcs = nn.ModuleList([])
+        self.biases = [True] * (len(self.layers) - 1)
+        self.biases[-1] = bias
+        for in_size, out_size, b in zip(self.layers[:-1], self.layers[1:], self.biases):
+            self.fcs.append(nn.Linear(in_size, out_size, bias=b))
+
+    def init_weights(self):
+        for fc in self.fcs:
+            nn.init.normal(fc.weight.data, 0, self.init_std)
+            nn.init.constant(fc.bias.data, 0)
+
+    def forward(self, input_feat):
+        feat = input_feat
+        len_afc = len(self.fcs)
+        for i in range(len_afc - 1):
+            feat = F.relu(self.fcs[i](feat))
+        return self.fcs[-1](feat)

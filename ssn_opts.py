@@ -14,10 +14,10 @@ parser.add_argument('--glcu', default=False, action='store_true',
                     help='whether to use the GLCU unit after backbone')
 parser.add_argument('--additive_glcu', '--addg', default=False, action='store_true',
                     help='whether to use the GLCU unit in additive mode as against hammond product')
-parser.add_argument('--task_target_ratio', '--ttr', default=0, type=int,
-                    help='Whether to give GT task as input to GLCU and to what ratio 1:?')
-parser.add_argument('--use_full_task_target', '--utt', default=False, action='store_true',
-                    help='Whether to give GT task as input to GLCU (equivalent to ttr of inf)')
+parser.add_argument('--glcu_skip', default=False, action='store_true',
+                    help='whether to use the skip-GLCU unit before classifier')
+parser.add_argument('--use_task_target', '--utt', default=False, action='store_true',
+                    help='Whether to give GT task as input to GLCU while training')
 
 parser.add_argument('--dropout', '--do', default=0.8, type=float,
                     metavar='DO', help='dropout ratio (default: 0.8)')
@@ -50,6 +50,8 @@ parser.add_argument('--tune_glcu', '--tg', default=False, action='store_true',
                     help='Whether to freeze backbone and cls_head weights and only to tune GLCU\'s')
 parser.add_argument('--tune_mid_glcu', '--tmg', default=False, action='store_true',
                     help='Whether to freeze backbone and cls_head weights and only to tune mid-GLCU')
+parser.add_argument('--tune_skip_glcu', '--tsg', default=False, action='store_true',
+                    help='Whether to freeze backbone and cls_head weights and only to tune skip-GLCU')
 parser.add_argument('--tune_cls_head', '--tch', default=False, action='store_true',
                     help='Whether to freeze backbone and GLCU weights and only to train cls_head')
 parser.add_argument('--easy_load', '--el', default=False, action='store_true',

@@ -35,7 +35,8 @@ def main():
                 args.modality,
                 base_model=args.arch, dropout=args.dropout,
                 stpp_cfg=stpp_configs, bn_mode=args.bn_mode,
-                task_head=args.task_head, glcu=args.glcu, additive_glcu=args.additive_glcu)
+                task_head=args.task_head, glcu_skip=args.glcu_skip,
+                glcu=args.glcu, additive_glcu=args.additive_glcu)
 
     if args.init_weights:
         if os.path.isfile(args.init_weights):
@@ -217,15 +218,15 @@ def train(train_loader, model, num_tasks, act_criterion, comp_criterion, regress
         task_target_var = torch.autograd.Variable(out_task_labels.squeeze().cuda(async=True))
 
         # Task target for GLCU
-        if args.use_full_task_target:
-            assert args.task_target_ratio == 0
-        if args.use_full_task_target or args.task_target_ratio > 0:
-            y = out_task_labels
-            y_onehot = torch.FloatTensor(y.size(0), num_tasks)
-            y_onehot.zero_()
-            y_onehot.scatter_(1, y, 1)
-            task_target_input_var = torch.autograd.Variable(y_onehot.cuda())
-            task_target_input = (task_target_input_var, args.use_full_task_target, args.task_target_ratio)
+        y = out_task_labels
+        y_onehot = torch.FloatTensor(y.size(0), num_tasks)
+        y_onehot.zero_()
+        y_onehot.scatter_(1, y, 1)
+        task_target_input_var = torch.autograd.Variable(y_onehot.cuda())
+        if args.glcu_skip:
+            task_target_input = task_target_input_var
+        elif args.glcu and args.use_task_target:
+            task_target_input = (task_target_input_var, True, None)
         else:
             task_target_input = None
 
