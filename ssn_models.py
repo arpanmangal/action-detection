@@ -255,12 +255,12 @@ class SSN(torch.nn.Module):
         reorganizing act weight:
         [W_A] -> [W_A | W_T]
         """
-        reorg_act_weight = torch.cat((self.activity_fc.weight.data, self.glcu_asc.weight.data), dim=1)
+        reorg_act_weight = torch.cat((self.activity_fc.weight.data, self.glcu_dsc_act.fcs[0].weight.data), dim=1)
         reorg_act_bias = self.activity_fc.bias.data
 
         """
         reorganizing comp weight:
-        stpp_feat_multiplier == 3
+        self.stpp.feat_multiplier == 3
         self.completeness_fc.weight.shape = [num_classes, 3 * 1024]
         after doing a view: [num_classes, 3, 1024]
         after transpose: [3, num_classes, 1024]
@@ -280,7 +280,7 @@ class SSN(torch.nn.Module):
         reorg_comp_weight = self.completeness_fc.weight.data.view(
             self.completeness_fc.out_features, self.stpp.feat_multiplier, self.activity_fc.in_features).transpose(0, 1)\
             .contiguous().view(-1, self.activity_fc.in_features)
-        stacked_comp_WT_by3 = self.glcu_dsc_comp.repeat(stpp_feat_multiplier, 1).view(-1, self.num_tasks) / float(stpp_feat_multiplier)
+        stacked_comp_WT_by3 = self.glcu_dsc_comp.fcs[0].weight.data.repeat(self.stpp.feat_multiplier, 1).view(-1, self.num_tasks) / float(self.stpp.feat_multiplier)
         reorg_comp_weight = torch.cat((reorg_comp_weight, stacked_comp_WT_by3), dim=1)
         reorg_comp_bias = self.completeness_fc.bias.data.view(1, -1).expand(
             self.stpp.feat_multiplier, self.completeness_fc.out_features).contiguous().view(-1) / self.stpp.feat_multiplier
@@ -300,7 +300,7 @@ class SSN(torch.nn.Module):
             reorg_reg_weight = self.regressor_fc.weight.data.view(
                 self.regressor_fc.out_features, self.stpp.feat_multiplier, self.activity_fc.in_features).transpose(0, 1) \
                 .contiguous().view(-1, self.activity_fc.in_features)
-            stacked_reg_WT_by3 = self.glcu_dsc_reg.repeat(stpp_feat_multiplier, 1).view(-1, self.num_tasks) / float(stpp_feat_multiplier)
+            stacked_reg_WT_by3 = self.glcu_dsc_reg.fcs[0].weight.data.repeat(self.stpp.feat_multiplier, 1).view(-1, self.num_tasks) / float(self.stpp.feat_multiplier)
             reorg_reg_weight = torch.cat((reorg_reg_weight, stacked_reg_WT_by3), dim=1)
             reorg_reg_bias = self.regressor_fc.bias.data.view(1, -1).expand(
                 self.stpp.feat_multiplier, self.regressor_fc.out_features).contiguous().view(-1) / self.stpp.feat_multiplier
@@ -573,7 +573,7 @@ class SSN(torch.nn.Module):
         raw_comp_fc = self.completeness_fc(completeness_ft)
         if self.glcu_skip:
             # Descending phase of skip-GLCU
-            task_input = task_target_input if task_target_input is not None else glcu_task_pred
+            task_input = task_target_input if task_target_input is not None else F.softmax(glcu_task_pred, dim=1)
             act_refinement = self.glcu_dsc_act(task_input).repeat(1, num_per_video).view(-1, raw_act_fc.size(1))
             comp_refinement = self.glcu_dsc_comp(task_input).repeat(1, num_per_video).view(-1, raw_comp_fc.size(1))
             raw_act_fc = raw_act_fc + act_refinement
@@ -600,7 +600,7 @@ class SSN(torch.nn.Module):
             raw_regress_fc = self.regressor_fc(completeness_ft).view(-1, self.completeness_fc.out_features, 2)
             if self.glcu_skip:
                 # Descending phase of skip-GLCU
-                task_input = task_target_input if task_target_input is not None else glcu_task_pred
+                task_input = task_target_input if task_target_input is not None else F.softmax(glcu_task_pred, dim=1)
                 reg_refinement = self.glcu_dsc_reg(task_input).repeat(1, num_per_video).view(-1, raw_regress_fc.size(1), raw_regress_fc.size(2))
                 raw_regress_fc = raw_regress_fc + reg_refinement
 

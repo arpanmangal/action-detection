@@ -426,13 +426,16 @@ def validate(val_loader, model, act_criterion, comp_criterion, regression_criter
             else:
                 print('\n-------------------------------------------')
 
-    print('Testing Results: Loss {loss.avg:.5f}      '
-          'Activity Loss {act_loss.avg:.3f}      '
-          'Completeness Loss {comp_loss.avg:.3f}\n'
-          'Act Accuracy {act_acc.avg:.02f} FG Acc. {fg_acc.avg:.02f} BG Acc. {bg_acc.avg:.02f}'
-          .format(act_loss=act_losses, comp_loss=comp_losses, loss=losses, act_acc=act_accuracies,
-                  fg_acc=fg_accuracies, bg_acc=bg_accuracies)
-          + '     Regression Loss {reg_loss.avg:.3f}'.format(reg_loss=reg_losses))
+    print('Testing Results: Loss {loss.avg:.5f}    '
+          'Activity Loss {act_loss.avg:.3f}    '
+          'Completeness Loss {comp_loss.avg:.3f}    '
+          'Regression Loss {reg_loss.avg:.3f}    '
+          'Act Accuracy {act_acc.avg:.02f} FG Acc. {fg_acc.avg:.02f} BG Acc. {bg_acc.avg:.02f}\n'
+          'Task Loss {task_losses.avg: .3f}    GLCU Loss {glcu_losses.avg: .3f}'
+          .format(act_loss=act_losses, comp_loss=comp_losses, reg_loss=reg_losses, loss=losses, act_acc=act_accuracies, \
+              fg_acc=fg_accuracies, bg_acc=bg_accuracies, task_losses=task_losses, glcu_losses=glcu_losses))
+                   
+    print ('------------------------------------------------\n')
 
     return losses.avg
 
@@ -493,3 +496,4 @@ def accuracy(output, target, topk=(1,)):
 
 if __name__ == '__main__':
     main()
+
