@@ -189,7 +189,7 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                 length = 10
             elif args.modality == 'RGBDiff':
                 length = 18
- 
+
             for frames in frames_gen:
                 # frames.shape == [frame_batch_size * num_crop * 3, 224, 224]
                 assert len(frames) == length * frame_cnt
@@ -198,7 +198,8 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                 assert base_out.size(0) == frame_cnt and base_out.size(1) == base_out_dim
                 step_features = base_out.mean(dim=0).unsqueeze(0)
                 glcu_task_pred = net.glcu_asc(step_features)
-                glcu_task_pred_repeated = glcu_task_pred.repeat(1, frame_cnt, glcu_task_pred.size(1))
+                glcu_task_pred = F.softmax(glcu_task_pred, dim=1)
+                glcu_task_pred_repeated = glcu_task_pred.repeat(1, frame_cnt).view(frame_cnt, glcu_task_pred.size(1))
                 base_out = torch.cat((base_out, glcu_task_pred_repeated), dim=1)
 
                 output = net.test_fc(base_out)
@@ -212,7 +213,7 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                 assert task_pred.size(0) == 1
                 task_pred = F.softmax(net.task_head(combined_scores).squeeze(), dim=0)
 
-                loss = KL(task_pred, glcu_task_pred)
+                loss = KL(task_pred, glcu_task_pred.squeeze())
                 loss.backward()
                 torch.cuda.empty_cache() # To empty the cache from previous iterations
                 break
@@ -254,7 +255,7 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                     if len(list(m.parameters())) > 0:
                         raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
 
-            for fc in net.glcu.afc:
+            for fc in net.glcu_asc.fcs:
                 for m in fc.modules():
                     if isinstance(m, torch.nn.Linear):
                         ps = list(m.parameters())
