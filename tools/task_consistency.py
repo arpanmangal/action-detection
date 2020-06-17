@@ -47,10 +47,10 @@ def prune_scores(scores, vid_id):
         task = np.argmax(np.matmul(step_scores, W))
     elif mode < 3:
         assert len(scores[-1]) == T
-        task = np.argmax(scores[-1])
+        task = np.argmax(scores[-1].squeeze())
     else:
         assert len(scores[-2]) == T
-        task = np.argmax(scores[-2])
+        task = np.argmax(scores[-2].squeeze())
 
     # Mask step scores
     mask = np.full(combined_scores.shape, math.exp(-2))
@@ -98,7 +98,7 @@ def task_glcu_acc(scores, index=-1):
     Find the task classification accuracy for GLCU
     """
     gt = get_task_gt(tag_file)
-    pred = {vid_id:np.argmax(vid_scores[index]) for vid_id, vid_scores in scores.items()}
+    pred = {vid_id:np.argmax(vid_scores[index].squeeze()) for vid_id, vid_scores in scores.items()}
 
     combined = np.array([[task, pred[vid_id]] for vid_id,task in gt.items()], dtype=int)
     acc = sum(combined[:, 0] == combined[:, 1]) / combined.shape[0]

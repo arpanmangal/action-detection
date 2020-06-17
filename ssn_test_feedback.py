@@ -22,12 +22,9 @@ parser.add_argument('dataset', type=str, choices=['activitynet1.2', 'thumos14', 
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('weights', type=str)
 parser.add_argument('save_scores', type=str)
-parser.add_argument('--one-hot-glcu', '--ohg', action='store_true', default=False, help='Use one-hot GLCU output based on max. pred')
+parser.add_argument('--feedback', type=int, default=5, help='Number of feedbacks')
 parser.add_argument('--test_prop_file', type=str, default=None, help='Path of test TAG file. If None will be taken from configs')
 parser.add_argument('--arch', type=str, default="BNInception")
-parser.add_argument('--bp', default=0, type=int, help='Number of BP steps for GLCU')
-parser.add_argument('--bp_num_frames', default=220, type=int, help='Number of frames from which to predict GLCU task')
-parser.add_argument('--lr', default=0.00001, type=float, help='LR for BP')
 parser.add_argument('--data_root', type=str, default='data/rawframes',
                     metavar='PATH', help='path of the rawframes folder')
 parser.add_argument('--save_raw_scores', type=str, default=None)
@@ -67,7 +64,7 @@ else:
 gpu_list = args.gpus if args.gpus is not None else range(8)
 
 
-def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queue, result_queue):
+def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
     torch.cuda.set_device(gpu_id)
 
     while True:
@@ -85,14 +82,15 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
         reorg_stpp = STPPReorgainzed(output_dim, num_class + 1, num_class,
                                  num_class * 2, True, stpp_cfg=stpp_configs)
 
-        def inference():
+        # Do simple inference to get backbone predictions
+        inf_dataset = dataset
+        net.eval()
+        frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = inf_dataset[index]
+
+        def backbone():
             """
-            Do simple inference to get predictions
+            Do simple inference to get backbone predictions
             """
-            inf_dataset = dataset
-            net.eval()
-            frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = inf_dataset[index]
-            
             num_crop = args.test_crops
             length = 3
             if args.modality == 'Flow':
@@ -122,28 +120,26 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             assert glcu_task_pred.size(0) == 1
             glcu_task_pred = F.softmax(glcu_task_pred, dim=1)
 
-            if args.one_hot_glcu:
-                glcu_task_pred_in = torch.autograd.Variable(torch.zeros(glcu_task_pred.size(0), glcu_task_pred.size(1))).cuda()
-                y = int(torch.max(glcu_task_pred, dim=1)[1])
-                glcu_task_pred_in[0, y] = 1.0
-            else:
-                glcu_task_pred_in = glcu_task_pred
+            return base_output, glcu_task_pred
 
+        def feedback(backbone_output, task_pred_glcu):
+            """
+            Run the classifier and STPP using backbone and glcu output
+            """
             # output.shape == [num_frames, 7791]
             output = torch.zeros((frame_cnt, output_dim)).cuda()
             cnt = 0
+            num_crop = args.test_crops
             for i in range(0, frame_cnt, 4):
-                base_out = base_output[:, i:i+4, :].contiguous().view(-1, base_out_dim)
+                base_out = backbone_output[:, i:i+4, :].contiguous().view(-1, base_out_dim)
                 num_frames = base_out.size(0)
-                glcu_task_pred_4_times = glcu_task_pred_in.repeat(1, num_frames).view(num_frames, glcu_task_pred.size(1))
+                glcu_task_pred_4_times = task_pred_glcu.repeat(1, num_frames).view(num_frames, task_pred_glcu.size(1))
                 base_out = torch.cat((base_out, glcu_task_pred_4_times), dim=1)
 
                 rst = net.test_fc(base_out)
                 sc = rst.data.view(num_crop, -1, output_dim).mean(dim=0)
                 output[cnt: cnt + sc.size(0), :] = sc
                 cnt += sc.size(0)
-            base_output = base_output.mean(dim=0).data
-            glcu_task_pred = glcu_task_pred.squeeze().data.cpu().numpy()
 
             # act_scores.shape == [num_proposals, K+1]
             # comp_scores.shape == [num_proposals, K]
@@ -166,153 +162,33 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
 
             torch.cuda.empty_cache() # To empty the cache from previous iterations
 
-            # perform stpp on scores
-            return ((inf_dataset.video_list[index].id,
-                    (rel_props.numpy(), act_scores.cpu().numpy(), comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), 
-                        glcu_task_pred, task_pred),
-                    output.cpu().numpy(),
-                    base_output.cpu().numpy()))
+            return act_scores, comp_scores, reg_scores, task_pred
 
-        def KL(P, Q):
-            """
-            find the KL divergence loss between P and Q
-            """
-            assert P.size() == Q.size()
-            # To prevent divide by zero
-            Q = Q + 1e-15
-            return torch.sum(P * torch.log(P / Q))
+        # Step 1: Run the backbone inference
+        base_output, glcu_task_pred = backbone()
+        torch.cuda.empty_cache() # To empty the cache from previous iterations
 
-        def update_net(optimizer):
-            """
-            # 1 iteration of bp
-            """
-            assert kl_train_dataset.bp_mode
-            frames_gen, frame_cnt, rel_props, prop_ticks, prop_scaling = kl_train_dataset[index]
+        # Step 2: Run the feedback
+        feedbacks = []
+        act_scores, comp_scores, reg_scores, task_pred = feedback(base_output, glcu_task_pred)
+        feedbacks.append((rel_props.cpu().numpy(), act_scores.cpu().numpy(), comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), 
+                           glcu_task_pred.squeeze().data.cpu().numpy(), task_pred))
 
-            optimizer.zero_grad()
-            
-            num_crop = 1
-            length = 3
-            if args.modality == 'Flow':
-                length = 10
-            elif args.modality == 'RGBDiff':
-                length = 18
+        for fb in range(args.feedback):
+            # Use the last task_pred as GLCU_desc output
+            task_pred_glcu = torch.autograd.Variable(torch.zeros(1, num_tasks)).cuda()
+            y = int(task_pred.argmax(axis=0))
+            task_pred_glcu[0, y] = 1.0
+            act_scores, comp_scores, reg_scores, task_pred = feedback(base_output, task_pred_glcu)
+            feedbacks.append((rel_props.cpu().numpy(), act_scores.cpu().numpy(), comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), 
+                           task_pred_glcu.squeeze().data.cpu().numpy(), task_pred))
 
-            for frames in frames_gen:
-                # frames.shape == [frame_batch_size * num_crop * 3, 224, 224]
-                assert len(frames) == length * frame_cnt
-                input_var = torch.autograd.Variable(frames.view(-1, length, frames.size(-2), frames.size(-1)).cuda())
-                base_out = net(input_var, None, None, None, None)
-                assert base_out.size(0) == frame_cnt and base_out.size(1) == base_out_dim
-                step_features = base_out.mean(dim=0).unsqueeze(0)
-                glcu_task_pred = net.glcu_asc(step_features)
-                glcu_task_pred = F.softmax(glcu_task_pred, dim=1)
-                glcu_task_pred_repeated = glcu_task_pred.repeat(1, frame_cnt).view(frame_cnt, glcu_task_pred.size(1))
-                base_out = torch.cat((base_out, glcu_task_pred_repeated), dim=1)
-
-                output = net.test_fc(base_out)
-                assert output.size(0) == frame_cnt and output.size(1) == output_dim
-                act_scores, comp_scores, reg_scores = reorg_stpp.forward(output, prop_ticks, prop_scaling, bp_mode=True)
-
-                # Task Head
-                combined_scores = F.softmax(act_scores[:, 1:], dim=1) * torch.exp(comp_scores)
-                combined_scores = combined_scores.mean(dim=0).unsqueeze(0)
-                task_pred = net.task_head(combined_scores)
-                assert task_pred.size(0) == 1
-                task_pred = F.softmax(net.task_head(combined_scores).squeeze(), dim=0)
-
-                loss = KL(task_pred, glcu_task_pred.squeeze())
-                loss.backward()
-                torch.cuda.empty_cache() # To empty the cache from previous iterations
-                break
-
-            optimizer.step()
-            optimizer.zero_grad()
-            torch.cuda.empty_cache()
-
-            return float(loss.data), frame_cnt
-
-        losses = []
-        for bp in range(args.bp):
-            # Freeze heads and create optimizer
-            net.train()
-            normal_weight = []
-            normal_bias = []
-            glcu_weight = []
-            glcu_bias = []
-            bn = []
-            for m in net.base_model.modules():
-                if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
-                    ps = list(m.parameters())
-                    assert len(ps) <= 2
-                    normal_weight.append(ps[0])
-                    if len(ps) == 2:
-                        normal_bias.append(ps[1])
-                elif isinstance(m, torch.nn.Linear):
-                    ps = list(m.parameters())
-                    assert len(ps) <= 2
-                    normal_weight.append(ps[0])
-                    if len(ps) == 2:
-                        normal_bias.append(ps[1])
-                elif isinstance(m, torch.nn.BatchNorm1d):
-                    bn.extend(list(m.parameters()))
-                elif isinstance(m, torch.nn.BatchNorm2d):
-                    # BN layers are all frozen in SSN
-                    continue
-                elif len(m._modules) == 0:
-                    if len(list(m.parameters())) > 0:
-                        raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
-
-            for fc in net.glcu_asc.fcs:
-                for m in fc.modules():
-                    if isinstance(m, torch.nn.Linear):
-                        ps = list(m.parameters())
-                        assert len(ps) <= 2
-                        glcu_weight.append(ps[0])
-                        if len(ps) == 2:
-                            glcu_bias.append(ps[1])
-                    else:
-                        print (m)
-                        raise ValueError("New module type")
-            
-            params = [
-                {'params': normal_weight, 'lr': 1 * args.lr, 'weight_decay': 1e-6,
-                'name': "normal_weight"},
-                {'params': normal_bias, 'lr': 2 * args.lr, 'weight_decay': 0,
-                'name': "normal_bias"},
-                {'params': bn, 'lr': 1 * args.lr, 'weight_decay': 0,
-                'name': "BN scale/shift"},
-                {'params': glcu_weight, 'lr': 1 * args.lr, 'weight_decay': 1e-6,
-                'name': "glcu_weight"},
-                {'params': glcu_bias, 'lr': 2 * args.lr, 'weight_decay': 0,
-                'name': "glcu_bias"}
-            ]
-
-            optimizer = optim.SGD(params, lr=args.lr, momentum=0.9)
-            optimizer.zero_grad()
-
-            loss = update_net(optimizer)
-            losses.append(loss)
-
-        if args.bp > 0:
-            print('-------------------------')
-            print ('#frames: ', losses[0][1])
-            for idx, loss in enumerate(losses):
-                print ('%d-i%d: KL Loss' % (index, idx), loss[0])
-            print('-------------------------')
-            sys.stdout.flush()
-
-        # Final inference
-        net.eval()
-        vid_id, (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred), \
-            output, base_output = inference()
-
-        del net
+        base_output = base_output.mean(dim=0).data
 
         # perform stpp on scores
-        result_queue.put((vid_id,
-            (rel_props, act_scores, comp_scores, reg_scores, glcu_task_pred, task_pred),
-            output, base_output   
+        result_queue.put((inf_dataset.video_list[index].id,
+            feedbacks,
+            base_output.cpu().numpy()
         ))
 
 
@@ -370,27 +246,10 @@ if __name__ == '__main__':
                              GroupNormalize(net.input_mean, net.input_std),
                          ]), reg_stats=stats, verbose=False)
 
-    kl_train_dataset = SSNDataSet(args.data_root, test_prop_file,
-                         new_length=data_length,
-                         modality=args.modality,
-                         aug_seg=2, body_seg=5,
-                         image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB",
-                                                                          "RGBDiff"] else args.flow_pref + "{}_{:05d}.jpg",
-                         test_mode=True, test_interval=args.frame_interval, 
-                         test_time_genbatchsize=args.bp_num_frames, bp_mode=True,
-                         transform=torchvision.transforms.Compose([
-                             single_cropping,
-                             Stack(roll=(args.arch in ['BNInception', 'InceptionV3'])),
-                             ToTorchFormatTensor(div=(args.arch not in ['BNInception', 'InceptionV3'])),
-                             GroupNormalize(net.input_mean, net.input_std),
-                         ]), reg_stats=stats, verbose=False)
-
     index_queue = ctx.Queue()
     result_queue = ctx.Queue()
-    workers = [ctx.Process(target=runner_func, args=(dataset, kl_train_dataset, base_dict, stats, gpu_list[i % len(gpu_list)], index_queue, result_queue))
+    workers = [ctx.Process(target=runner_func, args=(dataset, base_dict, stats, gpu_list[i % len(gpu_list)], index_queue, result_queue))
                for i in range(args.workers)]
-
-    del net
 
     for w in workers:
         w.daemon = True
@@ -403,23 +262,28 @@ if __name__ == '__main__':
 
     proc_start_time = time.time()
     if args.save_base_out is not None: base_out_f = open(args.save_base_out, 'wb')
-    if args.save_raw_scores is not None: raw_score_f = open(args.save_raw_scores, 'wb')
-    out_dict = {}
+    # if args.save_raw_scores is not None: raw_score_f = open(args.save_raw_scores, 'wb')
+    out_dict = dict()
+    for fb in range(args.feedback + 1):
+        out_dict[fb] = dict()
 
     for i in range(max_num):
-        vid_id, rst, output, base_out = result_queue.get()
+        vid_id, feedbacks, base_out = result_queue.get()
         vid_id = vid_id.split('/')[-1]
         if args.save_base_out is not None: pickle.dump((vid_id, base_out), base_out_f, pickle.HIGHEST_PROTOCOL)
-        if args.save_raw_scores is not None: pickle.dump((vid_id, output), raw_score_f, pickle.HIGHEST_PROTOCOL)
-        out_dict[vid_id] = rst
+
+        for fb, rst in enumerate(feedbacks):
+            out_dict[fb][vid_id] = rst
 
         cnt_time = time.time() - proc_start_time
         print('video {} done, total {}/{}, average {:.04f} sec/video'.format(i, i + 1,
                                                                         max_num,
                                                                         float(cnt_time) / (i + 1)))
     if args.save_base_out is not None: base_out_f.close()
-    if args.save_raw_scores is not None: raw_score_f.close()
+    # if args.save_raw_scores is not None: raw_score_f.close()
 
     if args.save_scores is not None:
-        save_dict = {k: v for k,v in out_dict.items()}
-        pickle.dump(save_dict, open(args.save_scores, 'wb'), pickle.HIGHEST_PROTOCOL)
+        for fb in range(args.feedback + 1):
+            save_file = '%s_fb%d.pkl' % (args.save_scores, fb)
+            save_dict = out_dict[fb]
+            pickle.dump(save_dict, open(save_file, 'wb'), pickle.HIGHEST_PROTOCOL)
