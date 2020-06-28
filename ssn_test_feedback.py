@@ -23,6 +23,7 @@ parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('weights', type=str)
 parser.add_argument('save_scores', type=str)
 parser.add_argument('--feedback', type=int, default=5, help='Number of feedbacks')
+parser.add_argument('--direct', action='store_true', default=False, help='Whether to directly use the one-hot final task prediction')
 parser.add_argument('--test_prop_file', type=str, default=None, help='Path of test TAG file. If None will be taken from configs')
 parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--data_root', type=str, default='data/rawframes',
@@ -176,9 +177,13 @@ def runner_func(dataset, state_dict, stats, gpu_id, index_queue, result_queue):
 
         for fb in range(args.feedback):
             # Use the last task_pred as GLCU_desc output
-            task_pred_glcu = torch.autograd.Variable(torch.zeros(1, num_tasks)).cuda()
-            y = int(task_pred.argmax(axis=0))
-            task_pred_glcu[0, y] = 1.0
+            if args.direct:
+                task_pred_glcu = torch.autograd.Variable(torch.zeros(1, num_tasks)).cuda()
+                y = int(task_pred.argmax(axis=0))
+                task_pred_glcu[0, y] = 1.0
+            else:
+                task_pred_glcu = torch.autograd.Variable(torch.from_numpy(task_pred).view(1, num_tasks)).cuda()
+            
             act_scores, comp_scores, reg_scores, task_pred = feedback(base_output, task_pred_glcu)
             feedbacks.append((rel_props.cpu().numpy(), act_scores.cpu().numpy(), comp_scores.cpu().numpy(), reg_scores.cpu().numpy(), 
                            task_pred_glcu.squeeze().data.cpu().numpy(), task_pred))

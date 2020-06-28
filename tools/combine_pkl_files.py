@@ -34,4 +34,14 @@ else:
         pickle.dump(result, open(os.path.join(result_dir, 'result_fb%d.pkl' % fb), 'wb') )
 
 # Combining the bo file
-## Not needed right now...
+if not fb:
+    result_f = open(os.path.join(result_dir, 'result_bo.pkl'), 'wb')
+    for i in range(split_start, split_end+1):
+        f = open(os.path.join(result_dir, 'result_bo%d.pkl' % i), 'rb')
+        while True:
+            try:
+                vid_id, base_out = pickle.load(f)
+                pickle.dump((vid_id, base_out), result_f)
+            except EOFError:
+                break
+            
