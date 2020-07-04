@@ -27,6 +27,7 @@ parser.add_argument('--test_prop_file', type=str, default=None, help='Path of te
 parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--bp', default=0, type=int, help='Number of BP steps for GLCU')
 parser.add_argument('--bp_num_frames', default=220, type=int, help='Number of frames from which to predict GLCU task')
+parser.add_argument('--bp_loss', default='KL', type=str, choices=['KL', 'L2', 'L2OH'], help='Type of loss used for backpropagation')
 parser.add_argument('--lr', default=0.00001, type=float, help='LR for BP')
 parser.add_argument('--data_root', type=str, default='data/rawframes',
                     metavar='PATH', help='path of the rawframes folder')
@@ -182,6 +183,23 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             Q = Q + 1e-15
             return torch.sum(P * torch.log(P / Q))
 
+        def L2(P, Q):
+            """
+            find the L2 loss between P and Q
+            """
+            assert P.size() == Q.size()
+            return torch.sum((P - Q) ** 2)
+
+        def L2OH(P, Q):
+            """
+            Convert Q to one-hot-vector QH and find L2 loss between P and QH
+            """
+            assert P.size() == Q.size()
+            QH = torch.autograd.Variable(torch.zeros(Q.size(0))).cuda()
+            y = int(torch.max(Q, dim=0)[1])
+            QH[y] = 1.0
+            return L2(P, QH)
+
         def update_net(optimizer):
             """
             # 1 iteration of bp
@@ -221,7 +239,14 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                 assert task_pred.size(0) == 1
                 task_pred = F.softmax(net.task_head(combined_scores).squeeze(), dim=0)
 
-                loss = KL(task_pred, glcu_task_pred.squeeze())
+                if args.bp_loss == 'KL':
+                    loss = KL(task_pred, glcu_task_pred.squeeze())
+                elif args.bp_loss == 'L2':
+                    loss = L2(task_pred, glcu_task_pred.squeeze())
+                elif args.bp_loss == 'L2OH':
+                    loss = L2OH(task_pred, glcu_task_pred.squeeze())
+                else:
+                    raise ValueError("Unknown Loss type")
                 loss.backward()
                 torch.cuda.empty_cache() # To empty the cache from previous iterations
                 break
@@ -238,24 +263,30 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             net.train()
             normal_weight = []
             normal_bias = []
-            glcu_weight = []
-            glcu_bias = []
+            # glcu_weight = []
+            # glcu_bias = []
             bn = []
+            for p in net.parameters():
+                p.requires_grad = False
+
             for m in net.base_model.modules():
                 if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
                     ps = list(m.parameters())
+                    for p in ps: p.requires_grad = True
                     assert len(ps) <= 2
                     normal_weight.append(ps[0])
                     if len(ps) == 2:
                         normal_bias.append(ps[1])
                 elif isinstance(m, torch.nn.Linear):
                     ps = list(m.parameters())
+                    for p in ps: p.requires_grad = True
                     assert len(ps) <= 2
                     normal_weight.append(ps[0])
                     if len(ps) == 2:
                         normal_bias.append(ps[1])
                 elif isinstance(m, torch.nn.BatchNorm1d):
                     bn.extend(list(m.parameters()))
+                    for p in m.parameters(): p.requires_grad = True
                 elif isinstance(m, torch.nn.BatchNorm2d):
                     # BN layers are all frozen in SSN
                     continue
@@ -263,17 +294,17 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                     if len(list(m.parameters())) > 0:
                         raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
 
-            for fc in net.glcu_asc.fcs:
-                for m in fc.modules():
-                    if isinstance(m, torch.nn.Linear):
-                        ps = list(m.parameters())
-                        assert len(ps) <= 2
-                        glcu_weight.append(ps[0])
-                        if len(ps) == 2:
-                            glcu_bias.append(ps[1])
-                    else:
-                        print (m)
-                        raise ValueError("New module type")
+            # for fc in net.glcu_asc.fcs:
+            #     for m in fc.modules():
+            #         if isinstance(m, torch.nn.Linear):
+            #             ps = list(m.parameters())
+            #             assert len(ps) <= 2
+            #             glcu_weight.append(ps[0])
+            #             if len(ps) == 2:
+            #                 glcu_bias.append(ps[1])
+            #         else:
+            #             print (m)
+            #             raise ValueError("New module type")
             
             params = [
                 {'params': normal_weight, 'lr': 1 * args.lr, 'weight_decay': 1e-6,
@@ -281,11 +312,11 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
                 {'params': normal_bias, 'lr': 2 * args.lr, 'weight_decay': 0,
                 'name': "normal_bias"},
                 {'params': bn, 'lr': 1 * args.lr, 'weight_decay': 0,
-                'name': "BN scale/shift"},
-                {'params': glcu_weight, 'lr': 1 * args.lr, 'weight_decay': 1e-6,
-                'name': "glcu_weight"},
-                {'params': glcu_bias, 'lr': 2 * args.lr, 'weight_decay': 0,
-                'name': "glcu_bias"}
+                'name': "BN scale/shift"}
+                # {'params': glcu_weight, 'lr': 1 * args.lr, 'weight_decay': 1e-6,
+                # 'name': "glcu_weight"},
+                # {'params': glcu_bias, 'lr': 2 * args.lr, 'weight_decay': 0,
+                # 'name': "glcu_bias"}
             ]
 
             optimizer = optim.SGD(params, lr=args.lr, momentum=0.9)
@@ -298,7 +329,7 @@ def runner_func(dataset, kl_train_dataset, state_dict, stats, gpu_id, index_queu
             print('-------------------------')
             print ('#frames: ', losses[0][1])
             for idx, loss in enumerate(losses):
-                print ('%d-i%d: KL Loss' % (index, idx), loss[0])
+                print ('%d-i%d: %s Loss' % (index, idx, args.bp_loss), loss[0])
             print('-------------------------')
             sys.stdout.flush()
 
